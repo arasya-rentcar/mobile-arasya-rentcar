@@ -7,6 +7,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { NoticeHost } from '@/components/NoticeHost';
+import '@/lib/backgroundSync'; // registers the background queue task (also for headless starts)
 import { persistCache } from '@/lib/cache';
 import { colors } from '@/lib/config';
 import { onReconnect } from '@/lib/network';

@@ -30,6 +30,13 @@ Login driver: `0812345678` / `test1234`. Login admin (untuk melihat layar "khusu
 
 Pemeriksaan: `npx tsc --noEmit` dan `npx expo export --platform android`.
 
+
+## Offline & sinkronisasi
+
+- Semua aksi (Terima, Berangkat, Sampai jemput, Selesai) dan laporan masuk antrean di HP dulu, layar langsung berubah, lalu dikirim berurutan begitu ada sinyal (coba ulang 5 dtk → 5 mnt).
+- Saat aplikasi ditutup, Android mengirim antrean di latar belakang kira-kira tiap 15 menit bila ada koneksi (`expo-background-task`).
+- Setiap item membawa `client_ref` (id unik) dan `occurred_at` (jam ditekan). Server mencatat jam asli kejadian dan mengabaikan kiriman ganda, jadi tidak ada yang tercatat dua kali walau terkirim ulang dari aplikasi dan dari latar belakang sekaligus.
+
 ## Membuat APK (gratis)
 
 1. Buat akun gratis di <https://expo.dev> lalu login: `npx eas-cli@latest login`.

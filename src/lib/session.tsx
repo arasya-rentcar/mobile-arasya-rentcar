@@ -5,11 +5,11 @@ import { clearCache, hydrateCache } from './cache';
 import { clearQueue, loadQueue } from './queue';
 import { queryClient } from './queryClient';
 import { registerForPush, unregisterPush } from './push';
-import { secureStorage } from './storage';
+import { secureStorage, TOKEN_KEY } from './storage';
+import { disableBackgroundSync, enableBackgroundSync } from './backgroundSync';
 import { showNotice } from './notices';
 import type { User } from './types';
 
-const TOKEN_KEY = 'arasya.token';
 const USER_KEY = 'arasya.user';
 const QUEUE_OWNER_KEY = 'arasya.queueOwner';
 
@@ -43,7 +43,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setAuthToken(token);
         await hydrateCache(queryClient);
         setState({ status: 'signedIn', user });
-        if (user.role === 'DRIVER') void registerForPush();
+        if (user.role === 'DRIVER') {
+          void registerForPush();
+          void enableBackgroundSync();
+        }
       } else {
         setState({ status: 'signedOut', user: null });
       }
@@ -82,10 +85,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       secureStorage.set(QUEUE_OWNER_KEY, user.id),
     ]);
     setState({ status: 'signedIn', user });
-    if (user.role === 'DRIVER') void registerForPush();
+    if (user.role === 'DRIVER') {
+      void registerForPush();
+      void enableBackgroundSync();
+    }
   }, []);
 
   const logout = useCallback(async () => {
+    await disableBackgroundSync();
     await unregisterPush();
     await clearQueue();
     await secureStorage.remove(QUEUE_OWNER_KEY);

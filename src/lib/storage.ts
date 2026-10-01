@@ -1,6 +1,9 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
+/** Where the session token is kept (shared with the background sync task). */
+export const TOKEN_KEY = 'arasya.token';
+
 /** Small secure key/value store: SecureStore on device, localStorage on web. */
 export const secureStorage = {
   async get(key: string): Promise<string | null> {

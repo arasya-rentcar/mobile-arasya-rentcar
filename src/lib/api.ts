@@ -19,6 +19,9 @@ let onUnauthorized: (() => void) | null = null;
 export function setAuthToken(token: string | null) {
   authToken = token;
 }
+export function hasAuthToken() {
+  return !!authToken;
+}
 export function setUnauthorizedHandler(fn: (() => void) | null) {
   onUnauthorized = fn;
 }
@@ -88,7 +91,7 @@ export const api = {
   me: () => request<DriverProfile>('/driver/me'),
   trips: (scope: 'active' | 'history') => request<Trip[]>(`/driver/trips?scope=${scope}`),
   trip: (id: string) => request<TripDetail>(`/driver/trips/${encodeURIComponent(id)}`),
-  tripAction: (id: string, action: 'accept' | 'start' | 'arrive' | 'finish', body?: { notes?: string; occurred_at?: string }) =>
+  tripAction: (id: string, action: 'accept' | 'start' | 'arrive' | 'finish', body?: { notes?: string; occurred_at?: string; client_ref?: string }) =>
     request<Trip>(`/driver/trips/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: body ?? {} }),
   uploadReport: (id: string, form: FormData) =>
     request<Report>(`/driver/trips/${encodeURIComponent(id)}/reports`, {

@@ -177,7 +177,11 @@ async function send(item: QueueItem) {
     deletePhoto(item.photoUri);
   } else {
     // occurred_at keeps the real time of the tap when it was queued offline.
-    const body: { notes?: string; occurred_at?: string } = { occurred_at: item.createdAt };
+    // client_ref makes a resent action a no-op on the server (exactly once).
+    const body: { notes?: string; occurred_at?: string; client_ref?: string } = {
+      occurred_at: item.createdAt,
+      client_ref: item.id,
+    };
     if (item.kind === 'finish' && item.notes) body.notes = item.notes;
     const trip = await api.tripAction(item.tripId, item.kind, body);
     handlers.onActionDone?.(item, trip);
