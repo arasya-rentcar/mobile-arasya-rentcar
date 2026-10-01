@@ -167,6 +167,8 @@ async function send(item: QueueItem) {
     const form = new FormData();
     form.append('report_type', item.reportType ?? 'NOTE');
     form.append('client_ref', item.id);
+    // When it was recorded on the phone (it may be sent much later).
+    form.append('occurred_at', item.createdAt);
     if (item.notes) form.append('notes', item.notes);
     if (item.amount != null) form.append('amount', String(item.amount));
     if (item.photoUri) await appendPhoto(form, item.photoUri, `${item.id}.jpg`);
@@ -174,7 +176,10 @@ async function send(item: QueueItem) {
     handlers.onReportDone?.(item, report);
     deletePhoto(item.photoUri);
   } else {
-    const trip = await api.tripAction(item.tripId, item.kind, item.kind === 'finish' && item.notes ? { notes: item.notes } : undefined);
+    // occurred_at keeps the real time of the tap when it was queued offline.
+    const body: { notes?: string; occurred_at?: string } = { occurred_at: item.createdAt };
+    if (item.kind === 'finish' && item.notes) body.notes = item.notes;
+    const trip = await api.tripAction(item.tripId, item.kind, body);
     handlers.onActionDone?.(item, trip);
   }
 }

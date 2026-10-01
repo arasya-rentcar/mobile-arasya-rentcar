@@ -177,6 +177,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && p === '/auth/login') {
       const body = JSON.parse((await readBody(req)).toString() || '{}');
+    // Same as the real API: the phone's time of the tap (queued offline) wins.
+    const at = body.occurred_at || now;
       const id = String(body.identifier || '').trim().replace(/\s|-/g, '');
       if ((id === '0812345678' || id === '+62812345678') && body.password === 'test1234') {
         return ok(res, { token: DRIVER_TOKEN, user: { id: 'usr-driver-1', email: 'budi@arasya.id', role: 'DRIVER' } });
@@ -192,6 +194,8 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/devices') {
       const body = JSON.parse((await readBody(req)).toString() || '{}');
+    // Same as the real API: the phone's time of the tap (queued offline) wins.
+    const at = body.occurred_at || now;
       if (req.method === 'POST') devices.add(body.token);
       if (req.method === 'DELETE') devices.delete(body.token);
       return send(res, 204);
@@ -238,32 +242,34 @@ const server = http.createServer(async (req, res) => {
       if (amount != null && (!Number.isInteger(amount) || amount < 0)) return fail(res, 400, 'amount tidak valid');
       // ODOMETER_* carry the odometer reading (km) in `amount`; cost types carry rupiah.
       if (fields.report_type.startsWith('ODOMETER') && amount == null) return fail(res, 400, 'Angka odometer wajib diisi');
-      const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: now };
+      const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now };
       (reports[t.id] ||= []).push(report);
       if (fields.client_ref) clientRefs.set(fields.client_ref, report);
       return ok(res, report, 201);
     }
 
     const body = JSON.parse((await readBody(req)).toString() || '{}');
+    // Same as the real API: the phone's time of the tap (queued offline) wins.
+    const at = body.occurred_at || now;
     if (action === 'accept') {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
-      t.accepted_at ||= now;
+      t.accepted_at ||= at;
     } else if (action === 'start') {
       if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
       if (t.status !== 'IN_PROGRESS') {
-        t.accepted_at ||= now;
+        t.accepted_at ||= at;
         t.status = 'IN_PROGRESS';
-        t.actual_start_at ||= now;
+        t.actual_start_at ||= at;
       }
     } else if (action === 'arrive') {
       if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
-      t.actual_pickup_at ||= now;
+      t.actual_pickup_at ||= at;
     } else if (action === 'finish') {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
       if (t.status !== 'DONE') {
-        t.accepted_at ||= now;
+        t.accepted_at ||= at;
         t.status = 'DONE';
-        t.trip_finished_at = now;
+        t.trip_finished_at = at;
         if (body.notes) t.notes = [t.notes, `Catatan driver: ${body.notes}`].filter(Boolean).join('\n');
       }
     }
