@@ -3,24 +3,35 @@ import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Directory, File, Paths } from 'expo-file-system';
 
-const MAX_SIDE = 1600;
+/** Long side and JPEG quality of each resize attempt; the second one is tried when the first fails. */
+const RESIZE_STEPS = [
+  { side: 1600, compress: 0.7 },
+  { side: 1024, compress: 0.5 },
+];
 
 export type PickResult = { uri: string } | { error: string } | null;
 
-/** Resize to max 1600px on the long side and re-encode as JPEG ~0.7. */
+const SHRINK_FAILED = 'Foto tidak bisa diproses. Coba ambil ulang.';
+
+/**
+ * Resize and re-encode as JPEG so uploads stay small. If resizing fails it is retried at a smaller
+ * size; the raw original is never used as a fallback (it can be many MB and would be refused by
+ * the server), so this throws when both attempts fail.
+ */
 async function shrink(asset: ImagePicker.ImagePickerAsset): Promise<string> {
-  try {
-    const { width, height } = asset;
-    const ctx = ImageManipulator.manipulate(asset.uri);
-    if (width && height && Math.max(width, height) > MAX_SIDE) {
-      ctx.resize(width >= height ? { width: MAX_SIDE } : { height: MAX_SIDE });
-    }
-    const image = await ctx.renderAsync();
-    const saved = await image.saveAsync({ compress: 0.7, format: SaveFormat.JPEG });
-    return saved.uri;
-  } catch {
-    return asset.uri;
+  const { width, height } = asset;
+  for (const step of RESIZE_STEPS) {
+    try {
+      const ctx = ImageManipulator.manipulate(asset.uri);
+      if (width && height && Math.max(width, height) > step.side) {
+        ctx.resize(width >= height ? { width: step.side } : { height: step.side });
+      }
+      const image = await ctx.renderAsync();
+      const saved = await image.saveAsync({ compress: step.compress, format: SaveFormat.JPEG });
+      return saved.uri;
+    } catch {}
   }
+  throw new Error(SHRINK_FAILED);
 }
 
 export async function takePhoto(): Promise<PickResult> {
@@ -34,7 +45,8 @@ export async function takePhoto(): Promise<PickResult> {
     const res = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 });
     if (res.canceled || !res.assets?.[0]) return null;
     return { uri: await shrink(res.assets[0]) };
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.message === SHRINK_FAILED) return { error: SHRINK_FAILED };
     return { error: 'Kamera tidak bisa dibuka. Coba pilih dari galeri.' };
   }
 }
@@ -44,7 +56,8 @@ export async function pickFromGallery(): Promise<PickResult> {
     const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8 });
     if (res.canceled || !res.assets?.[0]) return null;
     return { uri: await shrink(res.assets[0]) };
-  } catch {
+  } catch (e) {
+    if (e instanceof Error && e.message === SHRINK_FAILED) return { error: SHRINK_FAILED };
     return { error: 'Galeri tidak bisa dibuka.' };
   }
 }

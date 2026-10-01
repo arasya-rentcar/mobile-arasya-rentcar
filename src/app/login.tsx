@@ -20,9 +20,11 @@ import { useSession } from '@/lib/session';
 function loginErrorText(e: unknown) {
   if (e instanceof ApiError) {
     if (e.isNetwork) return 'Tidak bisa terhubung. Periksa sinyal atau paket data, lalu coba lagi.';
-    if (e.status === 401 || e.status === 400 || e.status === 404) {
-      return 'Nomor HP/email atau kata sandi salah. Periksa lagi, ya.';
+    if (e.status === 401) {
+      // The server's message is Indonesian; ignore the generic fallback api.ts makes up.
+      return e.message && !e.message.startsWith('Permintaan gagal') ? e.message : 'Nomor HP/email atau kata sandi salah';
     }
+    if (e.status === 400 || e.status === 404) return 'Nomor HP/email atau kata sandi salah. Periksa lagi, ya.';
     if (e.status === 403) return 'Akun Anda tidak aktif. Hubungi admin Arasya.';
     if (e.status === 429) return 'Terlalu sering mencoba. Tunggu sebentar lalu coba lagi.';
     return 'Server sedang bermasalah. Coba lagi beberapa saat lagi.';
@@ -76,7 +78,6 @@ export default function LoginScreen() {
               placeholderTextColor="#8593a3"
               autoCapitalize="none"
               autoCorrect={false}
-              keyboardType="email-address"
               textContentType="username"
               autoComplete="username"
               returnKeyType="next"

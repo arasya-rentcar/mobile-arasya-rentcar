@@ -66,11 +66,16 @@ export async function registerForPush(): Promise<string | null> {
   }
 }
 
-export async function unregisterPush() {
+/**
+ * Tells the backend to stop sending pushes to this device. `afterUnauthorized` is for the 401
+ * logout, where the session token is already refused: the call is still tried (without triggering
+ * another logout) in case the server accepts it.
+ */
+export async function unregisterPush(afterUnauthorized = false) {
   const token = await secureStorage.get(PUSH_TOKEN_KEY);
   if (!token) return;
   try {
-    await api.unregisterDevice(token);
+    await api.unregisterDevice(token, { skipAuthHandling: afterUnauthorized });
   } catch {}
   await secureStorage.remove(PUSH_TOKEN_KEY);
 }

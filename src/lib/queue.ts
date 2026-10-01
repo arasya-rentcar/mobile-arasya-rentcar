@@ -3,6 +3,12 @@
  * and reports. Items are persisted in AsyncStorage, sent in the order they were made, and retried
  * with backoff while there is no signal. Reports carry a `client_ref` (the item id) so a resend
  * after a lost response never creates a duplicate on the server.
+ *
+ * Two safety rules keep one bad item from hurting the rest:
+ * - An item that keeps failing with a temporary error (5xx / 408 / 429 / no answer) is retried at
+ *   most MAX_ATTEMPTS times, then marked `failed`. It is kept (with its photo) so the driver can
+ *   press "Coba lagi" or "Hapus", but it no longer blocks the other items of the trip.
+ * - Permanent refusals (4xx, including 413 "photo too large") are dropped with a notice.
  */
 import { useSyncExternalStore } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,6 +29,8 @@ export type QueueItem = {
   attempts: number;
   nextAttemptAt: number;
   lastError?: string;
+  /** Gave up automatic retries; waits for the driver ("Coba lagi" / "Hapus"). */
+  failed?: boolean;
   notes?: string;
   reportType?: ReportType;
   amount?: number | null;
@@ -40,6 +48,9 @@ export type QueueHandlers = {
 
 const STORAGE_KEY = 'arasya.queue.v1';
 const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+/** About 1.5 hours of retrying at the slowest backoff before an item is marked failed. */
+export const MAX_ATTEMPTS = 20;
+export const PHOTO_TOO_LARGE = 'Foto terlalu besar, coba ambil ulang';
 
 let items: QueueItem[] = [];
 let loaded = false;
@@ -47,6 +58,8 @@ let processing = false;
 let rerun = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let handlers: QueueHandlers = {};
+/** Ids this JS context removed (sent, dropped, cleared). Used so a merge never resurrects them. */
+const removedIds = new Set<string>();
 let canSend: () => boolean = () => true;
 const listeners = new Set<() => void>();
 
@@ -54,13 +67,44 @@ function emit() {
   listeners.forEach((l) => l());
 }
 
-async function persist() {
-  try {
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  } catch {}
+/**
+ * The app and the Android background task run in separate JS contexts that each hold their own
+ * copy of the queue. Writing our copy blindly would erase an item the other context enqueued in
+ * the meantime (last writer wins). So before every write we re-read storage and keep any stored
+ * item that we neither hold nor removed ourselves (union by id, minus our removed ids). Items
+ * removed by the other context may come back once and be resent; that is harmless because every
+ * item carries a client_ref and the server ignores repeats. Writes are chained so they never
+ * interleave within one context.
+ */
+let persisting: Promise<void> = Promise.resolve();
+
+function persist() {
+  persisting = persisting.then(async () => {
+    try {
+      let foreign: QueueItem[] = [];
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const stored = raw ? (JSON.parse(raw) as QueueItem[]) : [];
+        const mine = new Set(items.map((i) => i.id));
+        if (Array.isArray(stored)) foreign = stored.filter((i) => !mine.has(i.id) && !removedIds.has(i.id));
+      } catch {}
+      if (foreign.length) {
+        items = [...items, ...foreign.map((i) => ({ ...i, nextAttemptAt: 0 }))].sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt),
+        );
+        emit();
+      }
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    } catch {}
+  });
+  return persisting;
 }
 
 function setItems(next: QueueItem[]) {
+  next.forEach((i) => removedIds.delete(i.id));
+  items.forEach((i) => {
+    if (!next.some((n) => n.id === i.id)) removedIds.add(i.id);
+  });
   items = next;
   emit();
   void persist();
@@ -131,7 +175,10 @@ export function dropTripItems(tripId: string): QueueItem[] {
 }
 
 export async function clearQueue() {
-  items.forEach((i) => deletePhoto(i.photoUri));
+  items.forEach((i) => {
+    deletePhoto(i.photoUri);
+    removedIds.add(i.id);
+  });
   items = [];
   emit();
   try {
@@ -141,10 +188,29 @@ export async function clearQueue() {
 
 /** Make every waiting item eligible now (e.g. the driver pulled to refresh or signal came back). */
 export function retryNow() {
-  if (items.some((i) => i.nextAttemptAt > Date.now())) {
-    setItems(items.map((i) => ({ ...i, nextAttemptAt: 0 })));
+  if (items.some((i) => !i.failed && i.nextAttemptAt > Date.now())) {
+    setItems(items.map((i) => (i.failed ? i : { ...i, nextAttemptAt: 0 })));
   }
   void processQueue();
+}
+
+/** "Coba lagi" for failed items (one id, or all when omitted): start over with fresh attempts. */
+export function retryFailed(id?: string) {
+  if (!items.some((i) => i.failed && (!id || i.id === id))) return;
+  setItems(
+    items.map((i) =>
+      i.failed && (!id || i.id === id) ? { ...i, failed: false, attempts: 0, nextAttemptAt: 0, lastError: undefined } : i,
+    ),
+  );
+  void processQueue();
+}
+
+/** "Hapus": the driver gives up on an item (its photo is deleted too). */
+export function discardItem(id: string) {
+  const it = items.find((i) => i.id === id);
+  if (!it) return;
+  deletePhoto(it.photoUri);
+  setItems(items.filter((i) => i.id !== id));
 }
 
 function remove(id: string) {
@@ -156,8 +222,9 @@ function remove(id: string) {
 function schedule() {
   if (timer) clearTimeout(timer);
   timer = null;
-  if (!items.length) return;
-  const next = Math.min(...items.map((i) => i.nextAttemptAt));
+  const waiting = items.filter((i) => !i.failed);
+  if (!waiting.length) return;
+  const next = Math.min(...waiting.map((i) => i.nextAttemptAt));
   const wait = Math.max(1000, next - Date.now());
   timer = setTimeout(() => void processQueue(), wait);
 }
@@ -203,6 +270,7 @@ export async function processQueue(): Promise<void> {
         if (!canSend()) break;
         const item = items.find((i) => i.id === snapshot.id);
         if (!item) continue; // removed meanwhile (e.g. trip dropped)
+        if (item.failed) continue; // waits for the driver; does not block the trip
         if (blockedTrips.has(item.tripId)) continue; // keep per-trip order
         if (item.nextAttemptAt > Date.now()) {
           blockedTrips.add(item.tripId);
@@ -219,19 +287,24 @@ export async function processQueue(): Promise<void> {
           } else if (err.status === 401) {
             return; // session handler logs the driver out; keep the queue
           } else if (err.status === 0 || err.status === 408 || err.status === 429 || err.status >= 500) {
-            const attempts = item.attempts + 1;
-            const delay = BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];
+            // No answer at all (no signal) is not the item's fault, so it does not count.
+            const attempts = err.status === 0 ? item.attempts : item.attempts + 1;
+            const failed = attempts >= MAX_ATTEMPTS;
+            const delay = err.status === 0 ? 30_000 : BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];
             setItems(
               items.map((i) =>
-                i.id === item.id ? { ...i, attempts, nextAttemptAt: Date.now() + delay, lastError: err.message } : i,
+                i.id === item.id
+                  ? { ...i, attempts, failed, nextAttemptAt: Date.now() + delay, lastError: err.message }
+                  : i,
               ),
             );
             if (err.status === 0) break; // no signal: stop for now, timer retries later
-            blockedTrips.add(item.tripId);
+            if (!failed) blockedTrips.add(item.tripId);
+            else handlers.onRejected?.(item, 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di tugas ini.');
           } else {
             const gone = remove(item.id);
             deletePhoto(gone?.photoUri);
-            handlers.onRejected?.(item, err.message);
+            handlers.onRejected?.(item, err.status === 413 ? PHOTO_TOO_LARGE : err.message);
           }
         }
       }

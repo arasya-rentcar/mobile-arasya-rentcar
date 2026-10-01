@@ -72,13 +72,25 @@ const trips = [
   }),
 ];
 
+// `is_system` rows (START / ARRIVE_CUSTOMER / FINISH) are written by the server itself when a trip
+// is started, arrived at or finished; they are not driver reports and are not counted.
+const sys = (type, created_at) => ({ id: randomUUID(), report_type: type, notes: null, file_url: null, amount: null, created_at, is_system: true });
 const reports = {
   'line-done-cibubur': [
-    { id: randomUUID(), report_type: 'ODOMETER_START', notes: null, file_url: null, amount: 45210, created_at: at(-1, '06:00') },
-    { id: randomUUID(), report_type: 'TOLL', notes: 'Tol Jagorawi', file_url: null, amount: 24500, created_at: at(-1, '07:30') },
-    { id: randomUUID(), report_type: 'ODOMETER_END', notes: 'Bensin sisa 1/2', file_url: null, amount: 45318, created_at: at(-1, '17:35') },
+    sys('START', at(-1, '06:05')),
+    { id: randomUUID(), report_type: 'ODOMETER_START', notes: null, file_url: null, amount: 45210, created_at: at(-1, '06:00'), is_system: false },
+    sys('ARRIVE_CUSTOMER', at(-1, '06:50')),
+    { id: randomUUID(), report_type: 'TOLL', notes: 'Tol Jagorawi', file_url: null, amount: 24500, created_at: at(-1, '07:30'), is_system: false },
+    { id: randomUUID(), report_type: 'ODOMETER_END', notes: 'Bensin sisa 1/2', file_url: null, amount: 45318, created_at: at(-1, '17:35'), is_system: false },
+    sys('FINISH', at(-1, '17:40')),
   ],
 };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+function addSystemRow(tripId, type, created_at) {
+  const list = (reports[tripId] ||= []);
+  if (!list.some((r) => r.is_system && r.report_type === type)) list.push(sys(type, created_at));
+}
 const clientRefs = new Map(); // client_ref -> report
 const files = new Map(); // name -> Buffer
 const devices = new Set();
@@ -138,7 +150,7 @@ function parseMultipart(buf, contentType) {
 
 const isAccepted = (t) => !!t.accepted_at || ['ASSIGNED', 'IN_PROGRESS', 'DONE'].includes(t.status);
 const sortKey = (t) => t.start_at || t.service_date || '';
-const withCount = (t) => ({ ...t, report_count: (reports[t.id] || []).length });
+const withCount = (t) => ({ ...t, report_count: (reports[t.id] || []).filter((r) => !r.is_system).length });
 const expensesOf = (id) =>
   (reports[id] || [])
     .filter((r) => r.amount != null && ['FUEL', 'TOLL', 'PARKING', 'OTHER_COST'].includes(r.report_type))
@@ -177,8 +189,6 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && p === '/auth/login') {
       const body = JSON.parse((await readBody(req)).toString() || '{}');
-    // Same as the real API: the phone's time of the tap (queued offline) wins.
-    const at = body.occurred_at || now;
       const id = String(body.identifier || '').trim().replace(/\s|-/g, '');
       if ((id === '0812345678' || id === '+62812345678') && body.password === 'test1234') {
         return ok(res, { token: DRIVER_TOKEN, user: { id: 'usr-driver-1', email: 'budi@arasya.id', role: 'DRIVER' } });
@@ -194,8 +204,6 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/devices') {
       const body = JSON.parse((await readBody(req)).toString() || '{}');
-    // Same as the real API: the phone's time of the tap (queued offline) wins.
-    const at = body.occurred_at || now;
       if (req.method === 'POST') devices.add(body.token);
       if (req.method === 'DELETE') devices.delete(body.token);
       return send(res, 204);
@@ -231,6 +239,9 @@ const server = http.createServer(async (req, res) => {
       const { fields, files: fileParts } = parseMultipart(await readBody(req), req.headers['content-type']);
       const types = ['ODOMETER_START', 'ODOMETER_END', 'FUEL', 'TOLL', 'PARKING', 'OTHER_COST', 'PHOTO', 'NOTE'];
       if (!types.includes(fields.report_type)) return fail(res, 400, 'report_type tidak valid');
+      if (fields.client_ref && !UUID_RE.test(fields.client_ref)) return fail(res, 400, 'client_ref harus UUID');
+      if (fields.occurred_at && Number.isNaN(Date.parse(fields.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
+      if ((fileParts.photo?.data?.length || 0) > MAX_PHOTO_BYTES) return fail(res, 413, 'Ukuran foto maksimal 10 MB');
       if (fields.client_ref && clientRefs.has(fields.client_ref)) return ok(res, clientRefs.get(fields.client_ref));
       let file_url = null;
       if (fileParts.photo?.data?.length) {
@@ -240,15 +251,16 @@ const server = http.createServer(async (req, res) => {
       }
       const amount = fields.amount ? parseInt(fields.amount, 10) : null;
       if (amount != null && (!Number.isInteger(amount) || amount < 0)) return fail(res, 400, 'amount tidak valid');
-      // ODOMETER_* carry the odometer reading (km) in `amount`; cost types carry rupiah.
-      if (fields.report_type.startsWith('ODOMETER') && amount == null) return fail(res, 400, 'Angka odometer wajib diisi');
-      const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now };
+      // ODOMETER_* carry the odometer reading (km) in `amount`; cost types carry rupiah. Optional.
+      const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now, is_system: false };
       (reports[t.id] ||= []).push(report);
       if (fields.client_ref) clientRefs.set(fields.client_ref, report);
-      return ok(res, report, 201);
+      return ok(res, report);
     }
 
     const body = JSON.parse((await readBody(req)).toString() || '{}');
+    if (body.occurred_at && Number.isNaN(Date.parse(body.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
+    if (body.client_ref && !UUID_RE.test(body.client_ref)) return fail(res, 400, 'client_ref harus UUID');
     // Same as the real API: the phone's time of the tap (queued offline) wins.
     const at = body.occurred_at || now;
     if (action === 'accept') {
@@ -260,16 +272,19 @@ const server = http.createServer(async (req, res) => {
         t.accepted_at ||= at;
         t.status = 'IN_PROGRESS';
         t.actual_start_at ||= at;
+        addSystemRow(t.id, 'START', at);
       }
     } else if (action === 'arrive') {
       if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
       t.actual_pickup_at ||= at;
+      addSystemRow(t.id, 'ARRIVE_CUSTOMER', at);
     } else if (action === 'finish') {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
       if (t.status !== 'DONE') {
         t.accepted_at ||= at;
         t.status = 'DONE';
         t.trip_finished_at = at;
+        addSystemRow(t.id, 'FINISH', at);
         if (body.notes) t.notes = [t.notes, `Catatan driver: ${body.notes}`].filter(Boolean).join('\n');
       }
     }

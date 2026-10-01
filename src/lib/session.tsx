@@ -65,10 +65,20 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   // 401 anywhere: the token is no longer valid. Keep queued reports so they can still be sent
   // after the same driver logs in again.
+  // The push token is unregistered too, so this phone stops getting the old driver's pushes.
   useEffect(() => {
+    let handling = false; // several requests can fail with 401 at once
     setUnauthorizedHandler(() => {
+      if (handling) return;
+      handling = true;
       showNotice('Sesi Anda sudah berakhir. Silakan masuk lagi.', 'error');
-      void clearLocal();
+      void (async () => {
+        try {
+          await unregisterPush(true);
+        } catch {}
+        await clearLocal();
+        handling = false;
+      })();
     });
     return () => setUnauthorizedHandler(null);
   }, [clearLocal]);

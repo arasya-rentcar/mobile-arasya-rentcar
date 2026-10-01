@@ -56,6 +56,8 @@ export type Report = {
   file_url: string | null;
   amount: number | null;
   created_at: string;
+  /** Rows the server writes itself (START / ARRIVE_CUSTOMER / FINISH). Not shown to the driver. */
+  is_system?: boolean;
 };
 
 export type Expense = {

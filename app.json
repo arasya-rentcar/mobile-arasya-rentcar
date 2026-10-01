@@ -2,6 +2,7 @@
   "expo": {
     "name": "Arasya Driver",
     "slug": "arasya-driver",
+    "owner": "",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -64,6 +65,11 @@
       ],
       "expo-background-task"
     ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    },
     "experiments": {
       "typedRoutes": false,
       "reactCompiler": true

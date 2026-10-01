@@ -81,11 +81,17 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   return (json?.data ?? json) as T;
 }
 
+/** Phone numbers are typed with spaces, dashes, dots or brackets; emails are sent as typed. */
+export function normalizeIdentifier(raw: string) {
+  const id = raw.trim();
+  return id.includes('@') ? id : id.replace(/[\s\-.()]/g, '');
+}
+
 export const api = {
   login: (identifier: string, password: string) =>
     request<{ token: string; user: User }>('/auth/login', {
       method: 'POST',
-      body: { identifier, password },
+      body: { identifier: normalizeIdentifier(identifier), password },
       skipAuthHandling: true,
     }),
   me: () => request<DriverProfile>('/driver/me'),
@@ -101,5 +107,6 @@ export const api = {
     }),
   registerDevice: (token: string, platform: 'android' | 'ios') =>
     request<void>('/devices', { method: 'POST', body: { token, platform } }),
-  unregisterDevice: (token: string) => request<void>('/devices', { method: 'DELETE', body: { token } }),
+  unregisterDevice: (token: string, opts?: { skipAuthHandling?: boolean }) =>
+    request<void>('/devices', { method: 'DELETE', body: { token }, skipAuthHandling: opts?.skipAuthHandling }),
 };

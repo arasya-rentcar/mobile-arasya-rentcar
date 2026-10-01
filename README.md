@@ -33,14 +33,29 @@ Pemeriksaan: `npx tsc --noEmit` dan `npx expo export --platform android`.
 
 ## Offline & sinkronisasi
 
-- Semua aksi (Terima, Berangkat, Sampai jemput, Selesai) dan laporan masuk antrean di HP dulu, layar langsung berubah, lalu dikirim berurutan begitu ada sinyal (coba ulang 5 dtk → 5 mnt).
+- Semua aksi (Terima, Berangkat, Sampai jemput, Selesai) dan laporan masuk antrean di HP dulu, layar langsung berubah, lalu dikirim berurutan begitu ada sinyal (coba ulang 5 dtk → 5 mnt). Setelah 20 kali gagal karena error server, item ditandai **Gagal dikirim** dan driver bisa memilih **Coba lagi** atau **Hapus**; item itu tidak lagi menahan item lain. Foto lebih dari 10 MB (413) ditolak dengan pesan "Foto terlalu besar, coba ambil ulang".
 - Saat aplikasi ditutup, Android mengirim antrean di latar belakang kira-kira tiap 15 menit bila ada koneksi (`expo-background-task`).
 - Setiap item membawa `client_ref` (id unik) dan `occurred_at` (jam ditekan). Server mencatat jam asli kejadian dan mengabaikan kiriman ganda, jadi tidak ada yang tercatat dua kali walau terkirim ulang dari aplikasi dan dari latar belakang sekaligus.
+
+## Rilis pertama
+
+Langkah untuk pemilik, memakai akun Expo dan Firebase yang sudah ada. Semua isian di repo hanya satu baris tiap hal (`app.config.js` membacanya dari `app.json`, nilai kosong dianggap belum diisi).
+
+1. **Proyek Expo.** Di <https://expo.dev> buat proyek bernama **`arasya-driver`** (atau jalankan `npx eas-cli init`). Salin *Project ID* dan nama akun Expo Anda, lalu isi di `app.json`:
+   - `"owner": ""` (baris ke-5) menjadi `"owner": "nama-akun-expo"`
+   - `"projectId": ""` (di dalam `"extra": { "eas": { ... } }`, dekat bagian bawah) menjadi `"projectId": "<Project ID>"`
+
+   Commit perubahan itu.
+2. **Firebase (Android).** Di <https://console.firebase.google.com> tambahkan aplikasi Android dengan package **`com.arasyarentcar.driver`**, unduh **`google-services.json`**, dan taruh di root repo (sejajar dengan `package.json`). Tidak perlu mengedit apa pun: `app.config.js` otomatis mengisi `android.googleServicesFile` bila file itu ada. Commit file tersebut supaya ikut terbawa saat build di EAS.
+3. **Kunci push (FCM V1).** Firebase → *Project settings → Service accounts → Generate new private key*. Di expo.dev buka proyek → *Credentials* → Android → *Google Service Account Key for Push Notifications (FCM V1)* → unggah file JSON tadi.
+4. **Build APK.** Di GitHub: *Settings → Secrets and variables → Actions → New repository secret* bernama **`EXPO_TOKEN`** (token dari expo.dev → *Account settings → Access tokens*). Lalu tab **Actions → EAS Build (Android) → Run workflow** dengan profil **`preview`** (hasilnya APK). Tunggu build selesai di expo.dev, lalu bagikan link unduhan APK ke para driver.
+
+Catatan: karena memakai `app.config.js`, `npx eas-cli init` tidak bisa menulis `projectId` otomatis; isi manual seperti langkah 1.
 
 ## Membuat APK (gratis)
 
 1. Buat akun gratis di <https://expo.dev> lalu login: `npx eas-cli@latest login`.
-2. Sekali saja, hubungkan proyek: `npx eas-cli@latest init`. Perintah ini menulis `extra.eas.projectId` ke `app.json`. **Commit perubahan itu**, karena notifikasi push butuh projectId tersebut.
+2. Sekali saja, hubungkan proyek dan isi `owner` serta `extra.eas.projectId` di `app.json` (lihat **Rilis pertama**). **Commit perubahan itu**, karena notifikasi push butuh projectId tersebut.
 3. Build APK untuk dipasang langsung di HP driver:
    ```bash
    npx eas-cli@latest build -p android --profile preview
@@ -61,7 +76,7 @@ Workflow manual `.github/workflows/eas-build.yml` (tab **Actions → EAS Build (
 Android mengirim push lewat Firebase Cloud Messaging (FCM). Langkahnya:
 
 1. Buat proyek di <https://console.firebase.google.com>, tambahkan aplikasi Android dengan package **`com.arasyarentcar.driver`**.
-2. Unduh **`google-services.json`**, taruh di root repo ini, lalu tambahkan ke `app.json`: `"android": { "googleServicesFile": "./google-services.json", ... }`.
+2. Unduh **`google-services.json`** dan taruh di root repo ini (`app.config.js` otomatis memakainya sebagai `android.googleServicesFile`).
 3. Di Firebase: *Project settings → Service accounts → Generate new private key* (JSON).
 4. Unggah kunci itu ke EAS: `npx eas-cli@latest credentials` → Android → production/preview → *Google Service Account* → *Manage your Google Service Account Key for Push Notifications (FCM V1)* → upload file JSON tadi.
 5. Build ulang APK.
@@ -77,7 +92,7 @@ Semua respons `{ "status": "success", "data": ... }`, error `{ "status": "error"
 | POST | `/auth/login` | `{ identifier, password }` → `{ token, user: { id, email, role } }` |
 | GET | `/driver/me` | profil driver |
 | GET | `/driver/trips?scope=active\|history` | daftar tugas aktif (naik per tanggal) / riwayat (terbaru dulu) |
-| GET | `/driver/trips/:id` | detail + `reports` + `expenses` |
+| GET | `/driver/trips/:id` | detail + `reports` + `expenses` (baris `is_system` buatan server, mis. START/ARRIVE_CUSTOMER/FINISH, tidak ditampilkan) |
 | POST | `/driver/trips/:id/accept` | terima tugas (`accepted_at`) |
 | POST | `/driver/trips/:id/start` | berangkat dari garasi (`IN_PROGRESS`, `actual_start_at`) |
 | POST | `/driver/trips/:id/arrive` | sampai di lokasi jemput (`actual_pickup_at`) |
