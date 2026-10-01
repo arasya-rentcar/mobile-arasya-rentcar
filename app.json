@@ -1,0 +1,68 @@
+{
+  "expo": {
+    "name": "Arasya Driver",
+    "slug": "arasya-driver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "arasyadriver",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#ffffff",
+    "ios": {
+      "bundleIdentifier": "com.arasyarentcar.driver",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Kamera dipakai untuk foto odometer dan struk perjalanan.",
+        "NSPhotoLibraryUsageDescription": "Galeri dipakai untuk memilih foto struk perjalanan."
+      }
+    },
+    "android": {
+      "package": "com.arasyarentcar.driver",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#046bd2",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "permissions": ["android.permission.CAMERA", "android.permission.POST_NOTIFICATIONS"],
+      "softwareKeyboardLayoutMode": "resize",
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#046bd2",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 120
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#046bd2",
+          "defaultChannel": "trips"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Kamera dipakai untuk foto odometer dan struk perjalanan.",
+          "photosPermission": "Galeri dipakai untuk memilih foto struk perjalanan.",
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false,
+      "reactCompiler": true
+    }
+  }
+}

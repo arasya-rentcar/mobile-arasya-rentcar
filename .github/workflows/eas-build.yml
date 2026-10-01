@@ -1,0 +1,46 @@
+# Manual Android build on Expo Application Services (EAS).
+# Requires the repository secret EXPO_TOKEN (expo.dev -> Account settings -> Access tokens).
+name: EAS Build (Android)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Build profile (development | preview | production)"
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - production
+          - development
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check EXPO_TOKEN
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "Secret EXPO_TOKEN belum diisi. Lihat README (bagian Build APK)." >&2
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - run: npm ci
+
+      - name: Start EAS build
+        run: eas build --platform android --profile ${{ inputs.profile }} --non-interactive --no-wait
