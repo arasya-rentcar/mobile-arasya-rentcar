@@ -41,7 +41,7 @@ Pemeriksaan: `npx tsc --noEmit` dan `npx expo export --platform android`.
 
 Langkah untuk pemilik, memakai akun Expo dan Firebase yang sudah ada. Semua isian di repo hanya satu baris tiap hal (`app.config.js` membacanya dari `app.json`, nilai kosong dianggap belum diisi).
 
-1. **Proyek Expo.** Di <https://expo.dev> buat proyek bernama **`arasya-driver`** (atau jalankan `npx eas-cli init`). Salin *Project ID* dan nama akun Expo Anda, lalu isi di `app.json`:
+1. **Proyek Expo.** Di <https://expo.dev> buat proyek (atau jalankan `npx eas-cli init`); `"slug"` di `app.json` harus sama dengan slug proyek di expo.dev (sekarang **`arasyarentcar`**). Salin *Project ID* dan nama akun Expo Anda, lalu isi di `app.json`:
    - `"owner": ""` (baris ke-5) menjadi `"owner": "nama-akun-expo"`
    - `"projectId": ""` (di dalam `"extra": { "eas": { ... } }`, dekat bagian bawah) menjadi `"projectId": "<Project ID>"`
 
