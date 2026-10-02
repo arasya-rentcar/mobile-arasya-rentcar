@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "547625253213",
+    "project_id": "arasya-rentcar-mobile-apps",
+    "storage_bucket": "arasya-rentcar-mobile-apps.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:547625253213:android:4769c46f848af3b4b710b4",
+        "android_client_info": {
+          "package_name": "com.arasyarentcar.driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCHOIJy6eDkx-yk9i4sTRcfVHNgDBfVFpI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
