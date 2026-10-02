@@ -1,8 +1,14 @@
 import { API_URL } from './config';
 import type { DriverProfile, Report, Trip, TripDetail, User } from './types';
 
+/** `ApiError.status` when the request failed on the phone itself (e.g. the photo could not be read). */
+export const CLIENT_ERROR = -1;
+
 export class ApiError extends Error {
-  /** HTTP status, or 0 when the request never reached the server (no signal, timeout). */
+  /**
+   * HTTP status; 0 when the request never reached the server (no signal, timeout);
+   * CLIENT_ERROR (-1) when it could not be built or sent for a reason on the phone.
+   */
   status: number;
   constructor(status: number, message: string) {
     super(message);
@@ -11,6 +17,20 @@ export class ApiError extends Error {
   get isNetwork() {
     return this.status === 0;
   }
+}
+
+/**
+ * True for errors that mean "no connection": `expo/fetch` wraps every native transport failure
+ * (offline, DNS, reset, abort) in a FetchError whose message starts with "fetch failed:"; React
+ * Native's and the browser's fetch throw a TypeError ("Network request failed" / "Failed to
+ * fetch") or an AbortError. Anything else (for example the multipart encoder refusing a part)
+ * happened on the phone and must not be mistaken for missing signal.
+ */
+function isConnectionError(e: unknown) {
+  if (!(e instanceof Error)) return false;
+  if (e.name === 'AbortError') return true;
+  if (/^fetch failed:/i.test(e.message)) return true;
+  return e instanceof TypeError && /network request failed|failed to fetch|load failed|networkerror/i.test(e.message);
 }
 
 let authToken: string | null = null;
@@ -47,7 +67,11 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 20000);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, opts.timeoutMs ?? 20000);
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {
@@ -56,8 +80,11 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
       body,
       signal: controller.signal,
     });
-  } catch {
-    throw new ApiError(0, 'Tidak ada koneksi internet. Coba lagi sebentar.');
+  } catch (e) {
+    if (timedOut) throw new ApiError(0, 'Server tidak menjawab (waktu habis). Sinyal mungkin lemah.');
+    if (isConnectionError(e)) throw new ApiError(0, 'Tidak ada koneksi internet. Coba lagi sebentar.');
+    const detail = e instanceof Error ? e.message : String(e);
+    throw new ApiError(CLIENT_ERROR, `Gagal menyiapkan kiriman di HP: ${detail.slice(0, 160)}`);
   } finally {
     clearTimeout(timer);
   }

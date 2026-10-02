@@ -1,9 +1,9 @@
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
 import { showNotice } from './notices';
-import { dropTripItems, enqueue, useQueue, type QueueItem, type TripAction } from './queue';
+import { dropTripItems, enqueue, sendNow, useQueue, type QueueItem, type TripAction } from './queue';
 import { queryClient } from './queryClient';
 import { applyPending } from './tripState';
 import type { Trip, TripDetail } from './types';
@@ -95,4 +95,38 @@ export const queueHandlers = {
 
 export function doTripAction(tripId: string, kind: TripAction, notes?: string) {
   return enqueue({ tripId, kind, notes: notes?.trim() || undefined });
+}
+
+let sendingNow = false;
+const sendingListeners = new Set<() => void>();
+function setSendingNow(v: boolean) {
+  sendingNow = v;
+  sendingListeners.forEach((l) => l());
+}
+
+/** True while a "Kirim sekarang" tap is being worked on (to show a spinner). */
+export function useSendingNow() {
+  return useSyncExternalStore(
+    (l) => {
+      sendingListeners.add(l);
+      return () => sendingListeners.delete(l);
+    },
+    () => sendingNow,
+    () => sendingNow,
+  );
+}
+
+/** "Kirim sekarang" / "ketuk untuk kirim": sends everything and says what happened. */
+export async function sendQueueNow() {
+  if (sendingNow) return;
+  setSendingNow(true);
+  showNotice('Mengirim data...', 'info', 2500);
+  try {
+    const r = await sendNow();
+    if (!r.before) showNotice('Tidak ada data yang menunggu dikirim.', 'info');
+    else if (!r.left) showNotice('Semua data sudah terkirim.', 'success');
+    else showNotice(`${r.left} data belum terkirim.${r.lastError ? ` Penyebab: ${r.lastError}` : ''}`, 'error', 10000);
+  } finally {
+    setSendingNow(false);
+  }
 }

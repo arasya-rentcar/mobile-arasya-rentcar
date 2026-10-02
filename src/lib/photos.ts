@@ -102,12 +102,24 @@ export function deletePhoto(uri: string | null | undefined) {
   } catch {}
 }
 
-/** Appends the photo to a multipart form in the way each platform's fetch understands. */
+/**
+ * Appends the photo to a multipart form in the way each platform's fetch understands.
+ *
+ * On the phone the global fetch is `expo/fetch` (Expo SDK 57). Its multipart encoder
+ * (`expo/src/winter/fetch/convertFormData.ts`) does not accept React Native's `{ uri, name, type }`
+ * file parts ("Unsupported FormDataPart implementation"); it reads `name`, `type` and `bytes()`
+ * from the part instead. The file is read only when the request is built, so nothing is loaded
+ * into memory while the item waits in the queue. `type` must stay `image/jpeg`: the API refuses
+ * other types with 415.
+ */
 export async function appendPhoto(form: FormData, uri: string, name: string) {
   if (Platform.OS === 'web') {
     const blob = await (await fetch(uri)).blob();
     form.append('photo', blob, name);
   } else {
-    form.append('photo', { uri, name, type: 'image/jpeg' } as unknown as Blob);
+    const file = new File(uri);
+    if (!file.exists) throw new Error('File foto tidak ditemukan di HP. Hapus laporan ini lalu ambil foto ulang.');
+    const part = { name, type: 'image/jpeg', bytes: () => file.bytes() };
+    form.append('photo', part as unknown as Blob);
   }
 }

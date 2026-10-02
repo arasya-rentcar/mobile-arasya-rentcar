@@ -4,17 +4,23 @@
  * with backoff while there is no signal. Reports carry a `client_ref` (the item id) so a resend
  * after a lost response never creates a duplicate on the server.
  *
- * Two safety rules keep one bad item from hurting the rest:
- * - An item that keeps failing with a temporary error (5xx / 408 / 429 / no answer) is retried at
- *   most MAX_ATTEMPTS times, then marked `failed`. It is kept (with its photo) so the driver can
- *   press "Coba lagi" or "Hapus", but it no longer blocks the other items of the trip.
+ * Safety rules that keep one bad item from hurting the rest:
+ * - An item that keeps failing with a server error (5xx / 408 / 429) is retried at most
+ *   MAX_ATTEMPTS times; one that fails on the phone itself (CLIENT_ERROR, e.g. the photo cannot be
+ *   read) at most MAX_CLIENT_ATTEMPTS times. Then it is marked `failed`: it is kept (with its
+ *   photo) so the driver can press "Coba lagi" or "Hapus", but it no longer blocks anything.
+ * - No answer at all (status 0) while the phone says it is offline is not the item's fault and is
+ *   not counted. While the phone says it is online it is counted separately (MAX_NET_ATTEMPTS, a
+ *   looser limit) and only holds back that item's own trip, so a request that never gets through
+ *   (e.g. a timeout on a weak signal) cannot stall the whole queue forever.
  * - Permanent refusals (4xx, including 413 "photo too large") are dropped with a notice.
  */
 import { useSyncExternalStore } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 
-import { api, ApiError } from './api';
+import { api, ApiError, CLIENT_ERROR } from './api';
+import { getOnline } from './network';
 import { appendPhoto, deletePhoto } from './photos';
 import type { Report, ReportType, Trip } from './types';
 
@@ -26,7 +32,10 @@ export type QueueItem = {
   tripId: string;
   kind: TripAction | 'report';
   createdAt: string;
+  /** Server or phone-side failures (5xx / 408 / 429 / CLIENT_ERROR). */
   attempts: number;
+  /** No-answer failures while the phone believed it was online (status 0). */
+  netAttempts?: number;
   nextAttemptAt: number;
   lastError?: string;
   /** Gave up automatic retries; waits for the driver ("Coba lagi" / "Hapus"). */
@@ -48,13 +57,18 @@ export type QueueHandlers = {
 
 const STORAGE_KEY = 'arasya.queue.v1';
 const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+const NET_BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 300_000];
 /** About 1.5 hours of retrying at the slowest backoff before an item is marked failed. */
 export const MAX_ATTEMPTS = 20;
+/** A failure on the phone usually repeats, so the driver is told quickly. */
+export const MAX_CLIENT_ATTEMPTS = 3;
+/** About 2.5 hours of "online but no answer" before an item stops holding back its trip. */
+export const MAX_NET_ATTEMPTS = 30;
 export const PHOTO_TOO_LARGE = 'Foto terlalu besar, coba ambil ulang';
 
 let items: QueueItem[] = [];
 let loaded = false;
-let processing = false;
+let running: Promise<void> | null = null;
 let rerun = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let handlers: QueueHandlers = {};
@@ -197,12 +211,33 @@ export function retryNow() {
 /** "Coba lagi" for failed items (one id, or all when omitted): start over with fresh attempts. */
 export function retryFailed(id?: string) {
   if (!items.some((i) => i.failed && (!id || i.id === id))) return;
-  setItems(
-    items.map((i) =>
-      i.failed && (!id || i.id === id) ? { ...i, failed: false, attempts: 0, nextAttemptAt: 0, lastError: undefined } : i,
-    ),
-  );
+  setItems(items.map((i) => (i.failed && (!id || i.id === id) ? fresh(i) : i)));
   void processQueue();
+}
+
+function fresh(i: QueueItem): QueueItem {
+  return { ...i, failed: false, attempts: 0, netAttempts: 0, nextAttemptAt: 0, lastError: undefined };
+}
+
+export type SendResult = {
+  /** Items in the queue when the driver tapped. */
+  before: number;
+  /** Items still waiting or failed afterwards. */
+  left: number;
+  /** Why the first remaining item did not go out. */
+  lastError?: string;
+};
+
+/**
+ * "Kirim sekarang": the driver asked to send everything now, so failed items get fresh attempts
+ * too. Resolves when the queue has been worked through, so the screen can say what happened.
+ */
+export async function sendNow(): Promise<SendResult> {
+  const before = items.length;
+  if (before) setItems(items.map((i) => (i.failed ? fresh(i) : { ...i, nextAttemptAt: 0 })));
+  await processQueue();
+  const left = items.length;
+  return { before, left, lastError: items.find((i) => i.lastError)?.lastError };
 }
 
 /** "Hapus": the driver gives up on an item (its photo is deleted too). */
@@ -255,62 +290,80 @@ async function send(item: QueueItem) {
   }
 }
 
-export async function processQueue(): Promise<void> {
-  if (!loaded) return;
-  if (processing) {
+/**
+ * Works through the queue once (single flight). A call made while a run is going on asks for one
+ * more pass and returns the running promise, so callers can always await the outcome.
+ */
+export function processQueue(): Promise<void> {
+  if (!loaded) return Promise.resolve();
+  if (running) {
     rerun = true;
-    return;
+    return running;
   }
-  processing = true;
-  try {
-    do {
-      rerun = false;
-      const blockedTrips = new Set<string>();
-      for (const snapshot of [...items]) {
-        if (!canSend()) break;
-        const item = items.find((i) => i.id === snapshot.id);
-        if (!item) continue; // removed meanwhile (e.g. trip dropped)
-        if (item.failed) continue; // waits for the driver; does not block the trip
-        if (blockedTrips.has(item.tripId)) continue; // keep per-trip order
-        if (item.nextAttemptAt > Date.now()) {
-          blockedTrips.add(item.tripId);
-          continue;
-        }
-        try {
-          await send(item);
-          remove(item.id);
-        } catch (e) {
-          const err = e instanceof ApiError ? e : new ApiError(0, String((e as Error)?.message ?? e));
-          if (err.status === 404) {
-            const dropped = dropTripItems(item.tripId);
-            handlers.onTripGone?.(item.tripId, dropped);
-          } else if (err.status === 401) {
-            return; // session handler logs the driver out; keep the queue
-          } else if (err.status === 0 || err.status === 408 || err.status === 429 || err.status >= 500) {
-            // No answer at all (no signal) is not the item's fault, so it does not count.
-            const attempts = err.status === 0 ? item.attempts : item.attempts + 1;
-            const failed = attempts >= MAX_ATTEMPTS;
-            const delay = err.status === 0 ? 30_000 : BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];
-            setItems(
-              items.map((i) =>
-                i.id === item.id
-                  ? { ...i, attempts, failed, nextAttemptAt: Date.now() + delay, lastError: err.message }
-                  : i,
-              ),
-            );
-            if (err.status === 0) break; // no signal: stop for now, timer retries later
-            if (!failed) blockedTrips.add(item.tripId);
-            else handlers.onRejected?.(item, 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di tugas ini.');
-          } else {
-            const gone = remove(item.id);
-            deletePhoto(gone?.photoUri);
-            handlers.onRejected?.(item, err.status === 413 ? PHOTO_TOO_LARGE : err.message);
+  running = run().finally(() => {
+    running = null;
+    schedule();
+  });
+  return running;
+}
+
+function update(id: string, patch: Partial<QueueItem>) {
+  setItems(items.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+}
+
+const GAVE_UP = 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di tugas ini.';
+
+async function run(): Promise<void> {
+  do {
+    rerun = false;
+    const blockedTrips = new Set<string>();
+    for (const snapshot of [...items]) {
+      if (!canSend()) break;
+      const item = items.find((i) => i.id === snapshot.id);
+      if (!item) continue; // removed meanwhile (e.g. trip dropped)
+      if (item.failed) continue; // waits for the driver; does not block the trip
+      if (blockedTrips.has(item.tripId)) continue; // keep per-trip order
+      if (item.nextAttemptAt > Date.now()) {
+        blockedTrips.add(item.tripId);
+        continue;
+      }
+      try {
+        await send(item);
+        remove(item.id);
+      } catch (e) {
+        // appendPhoto and other preparation can throw plain errors: those happened on the phone.
+        const err = e instanceof ApiError ? e : new ApiError(CLIENT_ERROR, String((e as Error)?.message ?? e));
+        if (err.status === 404) {
+          const dropped = dropTripItems(item.tripId);
+          handlers.onTripGone?.(item.tripId, dropped);
+        } else if (err.status === 401) {
+          return; // session handler logs the driver out; keep the queue
+        } else if (err.status === 0) {
+          if (!getOnline()) {
+            // Offline: nothing can go out and it is not the item's fault. Not counted; the
+            // reconnect event (or the timer) tries again.
+            update(item.id, { nextAttemptAt: Date.now() + 30_000, lastError: err.message });
+            break;
           }
+          const netAttempts = (item.netAttempts ?? 0) + 1;
+          const failed = netAttempts >= MAX_NET_ATTEMPTS;
+          const delay = NET_BACKOFF_MS[Math.min(netAttempts - 1, NET_BACKOFF_MS.length - 1)];
+          update(item.id, { netAttempts, failed, nextAttemptAt: Date.now() + delay, lastError: err.message });
+          if (failed) handlers.onRejected?.(item, GAVE_UP);
+          else blockedTrips.add(item.tripId); // other trips may still get through
+        } else if (err.status === CLIENT_ERROR || err.status === 408 || err.status === 429 || err.status >= 500) {
+          const attempts = item.attempts + 1;
+          const failed = attempts >= (err.status === CLIENT_ERROR ? MAX_CLIENT_ATTEMPTS : MAX_ATTEMPTS);
+          const delay = BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];
+          update(item.id, { attempts, failed, nextAttemptAt: Date.now() + delay, lastError: err.message });
+          if (failed) handlers.onRejected?.(item, `${GAVE_UP} (${err.message})`);
+          else blockedTrips.add(item.tripId);
+        } else {
+          const gone = remove(item.id);
+          deletePhoto(gone?.photoUri);
+          handlers.onRejected?.(item, err.status === 413 ? PHOTO_TOO_LARGE : err.message);
         }
       }
-    } while (rerun);
-  } finally {
-    processing = false;
-    schedule();
-  }
+    }
+  } while (rerun);
 }

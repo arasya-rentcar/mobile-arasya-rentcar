@@ -6,9 +6,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Banner, Button, Card, Dialog } from '@/components/ui';
 import { API_URL, colors, font } from '@/lib/config';
 import { useOnline } from '@/lib/network';
-import { retryNow, useQueue } from '@/lib/queue';
+import { useQueue } from '@/lib/queue';
 import { useSession } from '@/lib/session';
-import { useMe } from '@/lib/trips';
+import { sendQueueNow, useMe, useSendingNow } from '@/lib/trips';
 
 const STATUS_TEXT: Record<string, string> = {
   AVAILABLE: 'Siap tugas',
@@ -21,6 +21,7 @@ export default function ProfileScreen() {
   const me = useMe(session.status === 'signedIn');
   const queue = useQueue();
   const online = useOnline();
+  const sending = useSendingNow();
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -57,7 +58,14 @@ export default function ProfileScreen() {
           <Banner tone="warning" icon="time">
             {`${queue.length} data belum terkirim.`}
           </Banner>
-          <Button title="Kirim sekarang" icon="cloud-upload-outline" variant="outline" onPress={retryNow} disabled={!online} />
+          <Button
+            title="Kirim sekarang"
+            icon="cloud-upload-outline"
+            variant="outline"
+            onPress={sendQueueNow}
+            loading={sending}
+            disabled={!online}
+          />
         </Card>
       ) : null}
 
