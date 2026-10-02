@@ -2,7 +2,7 @@
   "expo": {
     "name": "Arasya Driver",
     "slug": "arasya-driver",
-    "owner": "",
+    "owner": "rimbalun",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -67,7 +67,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "08ba4d2a-eafe-4590-a04a-23b0e469f171"
       }
     },
     "experiments": {
