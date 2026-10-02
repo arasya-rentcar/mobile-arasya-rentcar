@@ -19,7 +19,6 @@
     },
     "android": {
       "package": "com.arasyarentcar.driver",
-      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#046bd2",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
