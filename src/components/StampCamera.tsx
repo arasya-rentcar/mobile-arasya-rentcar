@@ -212,7 +212,14 @@ export function StampCamera({
         {shot ? (
           // Drawn at the output size, captured, then handed back. Hidden behind the cover below.
           <View ref={compose} collapsable={false} style={{ position: 'absolute', top: 0, left: 0, width: viewW, height: viewH }}>
-            <Image source={{ uri: shot.uri }} style={{ width: viewW, height: viewH }} onLoadEnd={composeLoaded} resizeMode="cover" />
+            {/* resizeMethod: Android decodes at the view size, not the full 12 MP (memory). */}
+            <Image
+              source={{ uri: shot.uri }}
+              style={{ width: viewW, height: viewH }}
+              onLoadEnd={composeLoaded}
+              resizeMode="cover"
+              resizeMethod="resize"
+            />
             <StampOverlay info={info} fix={shot.fix} at={shot.at} width={viewW} />
           </View>
         ) : null}
