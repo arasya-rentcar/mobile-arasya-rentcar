@@ -3,7 +3,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { colors, font } from '@/lib/config';
 import { tripDays, tripTimeText } from '@/lib/format';
-import { statusChip } from '@/lib/tripState';
+import { statusChip, unpaid } from '@/lib/tripState';
 import type { Trip } from '@/lib/types';
 import { Chip } from './ui';
 
@@ -61,6 +61,12 @@ export function TripCard({ trip, onPress, pending }: { trip: Trip; onPress: () =
         {days > 1 ? <Chip label={`${days} hari`} tone="accepted" /> : null}
       </View>
 
+      {unpaid(trip) ? (
+        <View style={styles.pending}>
+          <Ionicons name="wallet-outline" size={18} color={colors.warning} />
+          <Text style={styles.pendingText}>Belum lunas: perjalanan belum boleh dimulai</Text>
+        </View>
+      ) : null}
       {pending > 0 ? (
         <View style={styles.pending}>
           <Ionicons name="cloud-upload-outline" size={18} color={colors.warning} />

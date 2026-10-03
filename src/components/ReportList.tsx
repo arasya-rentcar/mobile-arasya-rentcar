@@ -16,7 +16,7 @@ function absoluteUrl(url: string) {
 }
 
 /** Rows the server creates for trip steps. Used only when the API does not send `is_system`. */
-const SYSTEM_TYPES = new Set(['START', 'ARRIVE_CUSTOMER', 'FINISH', 'DROP']);
+const SYSTEM_TYPES = new Set(['START', 'ARRIVE_CUSTOMER', 'ONBOARD', 'FINISH', 'DROP']);
 
 /** Only reports the driver sent are listed. */
 export function isDriverReport(r: Report) {

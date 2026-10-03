@@ -22,9 +22,9 @@ import * as Crypto from 'expo-crypto';
 import { api, ApiError, CLIENT_ERROR } from './api';
 import { getOnline } from './network';
 import { appendPhoto, deletePhoto } from './photos';
-import type { Report, ReportType, Trip } from './types';
+import type { GpsFix, Report, ReportType, Trip } from './types';
 
-export type TripAction = 'accept' | 'start' | 'arrive' | 'finish';
+export type TripAction = 'accept' | 'start' | 'arrive' | 'board' | 'finish';
 
 export type QueueItem = {
   /** Unique id; doubles as the report `client_ref`. */
@@ -44,6 +44,10 @@ export type QueueItem = {
   reportType?: ReportType;
   amount?: number | null;
   photoUri?: string | null;
+  /** GPS fix (arrival photo and the arrive action). */
+  location?: GpsFix | null;
+  /** The photo already carries the time/GPS stamp (else the server adds it). */
+  stamped?: boolean;
 };
 
 export type QueueHandlers = {
@@ -264,6 +268,18 @@ function schedule() {
   timer = setTimeout(() => void processQueue(), wait);
 }
 
+/** The API's names for a GPS fix (empty when there is none). */
+function locationFields(fix: GpsFix | null | undefined): Record<string, string | number | boolean> {
+  if (!fix) return {};
+  return {
+    latitude: fix.latitude,
+    longitude: fix.longitude,
+    ...(fix.accuracy != null ? { location_accuracy_m: Math.round(fix.accuracy) } : {}),
+    location_at: fix.at,
+    ...(fix.mocked != null ? { location_mocked: fix.mocked } : {}),
+  };
+}
+
 async function send(item: QueueItem) {
   if (item.kind === 'report') {
     const form = new FormData();
@@ -273,6 +289,8 @@ async function send(item: QueueItem) {
     form.append('occurred_at', item.createdAt);
     if (item.notes) form.append('notes', item.notes);
     if (item.amount != null) form.append('amount', String(item.amount));
+    for (const [k, v] of Object.entries(locationFields(item.location))) form.append(k, String(v));
+    if (item.stamped) form.append('stamped', 'true');
     if (item.photoUri) await appendPhoto(form, item.photoUri, `${item.id}.jpg`);
     const report = await api.uploadReport(item.tripId, form);
     handlers.onReportDone?.(item, report);
@@ -280,9 +298,10 @@ async function send(item: QueueItem) {
   } else {
     // occurred_at keeps the real time of the tap when it was queued offline.
     // client_ref makes a resent action a no-op on the server (exactly once).
-    const body: { notes?: string; occurred_at?: string; client_ref?: string } = {
+    const body: Record<string, string | number | boolean> = {
       occurred_at: item.createdAt,
       client_ref: item.id,
+      ...locationFields(item.location),
     };
     if (item.kind === 'finish' && item.notes) body.notes = item.notes;
     const trip = await api.tripAction(item.tripId, item.kind, body);

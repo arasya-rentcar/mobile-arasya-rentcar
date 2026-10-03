@@ -14,7 +14,8 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSCameraUsageDescription": "Kamera dipakai untuk foto odometer dan struk perjalanan.",
-        "NSPhotoLibraryUsageDescription": "Galeri dipakai untuk memilih foto struk perjalanan."
+        "NSPhotoLibraryUsageDescription": "Galeri dipakai untuk memilih foto struk perjalanan.",
+        "NSLocationWhenInUseUsageDescription": "Lokasi dicatat saat Anda sampai di lokasi jemput, supaya kantor bisa mengecek."
       }
     },
     "android": {
@@ -26,7 +27,9 @@
       },
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false
@@ -62,7 +65,23 @@
           "microphonePermission": false
         }
       ],
-      "expo-background-task"
+      "expo-background-task",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Kamera dipakai untuk foto odometer, struk, dan foto di lokasi jemput.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Lokasi dicatat saat Anda sampai di lokasi jemput, supaya kantor bisa mengecek.",
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
+        }
+      ]
     ],
     "extra": {
       "eas": {

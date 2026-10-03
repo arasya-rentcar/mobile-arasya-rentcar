@@ -11,6 +11,10 @@ export function Stepper({ trip }: { trip: Trip }) {
     { label: 'Diterima', done: isAccepted(trip), at: trip.accepted_at },
     { label: 'Berangkat', done: !!trip.actual_start_at || trip.status === 'IN_PROGRESS', at: trip.actual_start_at },
     { label: 'Sampai jemput', done: !!trip.actual_pickup_at, at: trip.actual_pickup_at },
+    // Older servers have no "Mulai perjalanan" step (field not sent).
+    ...(trip.customer_onboard_at !== undefined
+      ? [{ label: 'Mulai jalan', done: !!trip.customer_onboard_at, at: trip.customer_onboard_at ?? null }]
+      : []),
     { label: 'Selesai', done: trip.status === 'DONE', at: trip.trip_finished_at },
   ];
   const current = steps.findIndex((s) => !s.done);

@@ -9,7 +9,12 @@ import { secureStorage } from './storage';
 const PUSH_TOKEN_KEY = 'arasya.pushToken';
 export const TRIPS_CHANNEL = 'trips';
 
-export type PushData = { type?: 'trip_assigned' | 'trip_reminder' | 'trip_updated'; line_id?: string };
+export type PushData = {
+  type?: 'trip_assigned' | 'trip_reminder' | 'trip_updated' | 'order_paid' | 'payable_paid' | 'expense_rejected';
+  line_id?: string;
+  /** The inbox row this push was stored as (marked read when the push is opened). */
+  notification_id?: string;
+};
 
 const pushSupported = Platform.OS !== 'web';
 
@@ -28,7 +33,7 @@ export async function ensureChannel() {
   if (Platform.OS !== 'android') return;
   await Notifications.setNotificationChannelAsync(TRIPS_CHANNEL, {
     name: 'Tugas perjalanan',
-    description: 'Tugas baru, pengingat, dan perubahan tugas',
+    description: 'Tugas baru, pengingat, perubahan tugas, pelunasan order dan pembayaran fee',
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 300, 200, 300],
     lightColor: '#046bd2',
@@ -103,13 +108,13 @@ export function addPushListeners(handlers: {
 }
 
 /** The notification that launched the app (cold start), if any; cleared after reading. */
-export async function takeLaunchTripId(): Promise<string | null> {
+export async function takeLaunchNotification(): Promise<{ tripId: string | null; data: PushData } | null> {
   if (!pushSupported) return null;
   try {
     const res = await Notifications.getLastNotificationResponseAsync();
     if (!res) return null;
     await Notifications.clearLastNotificationResponseAsync();
-    return tripIdFromResponse(res);
+    return { tripId: tripIdFromResponse(res), data: (res.notification.request.content.data ?? {}) as PushData };
   } catch {
     return null;
   }

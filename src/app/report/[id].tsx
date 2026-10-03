@@ -16,17 +16,18 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { Banner, Button } from '@/components/ui';
 import { colors, font } from '@/lib/config';
-import { formatThousands, parseRupiah } from '@/lib/format';
+import { formatKm, formatThousands, parseRupiah } from '@/lib/format';
 import { useOnline } from '@/lib/network';
 import { showNotice } from '@/lib/notices';
 import { keepPhoto, pickFromGallery, takePhoto, type PickResult } from '@/lib/photos';
-import { enqueue, newId } from '@/lib/queue';
-import { COST_TYPES, REPORT_LABEL } from '@/lib/tripState';
+import { enqueue, newId, useQueue } from '@/lib/queue';
+import { COST_TYPES, odometerButtons, odometerStartKm, REPORT_LABEL } from '@/lib/tripState';
+import { useTrip } from '@/lib/trips';
 import type { ReportType } from '@/lib/types';
 
 const TITLES: Record<string, string> = {
-  ODOMETER_START: 'Foto odometer',
-  ODOMETER_END: 'Foto odometer',
+  ODOMETER_START: 'Odometer awal',
+  ODOMETER_END: 'Odometer akhir',
   FUEL: 'Bensin',
   TOLL: 'Tol',
   PARKING: 'Parkir',
@@ -38,6 +39,7 @@ const TITLES: Record<string, string> = {
 // Web only: the browser focus ring clashes with our own borders.
 const noOutline = (Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) as object;
 
+// ARRIVAL_PHOTO has its own screen (arrive/[id]) with the GPS fix.
 const VALID: ReportType[] = ['ODOMETER_START', 'ODOMETER_END', 'FUEL', 'TOLL', 'PARKING', 'OTHER_COST', 'PHOTO', 'NOTE'];
 
 export default function ReportFormScreen() {
@@ -47,7 +49,10 @@ export default function ReportFormScreen() {
   const insets = useSafeAreaInsets();
   const online = useOnline();
 
-  const [type, setType] = useState<ReportType>(initial === 'NOTE' ? 'PHOTO' : initial);
+  // The type is fixed by the button the driver pressed (odometer start and end each have their own).
+  const type: ReportType = initial === 'NOTE' ? 'PHOTO' : initial;
+  const { trip } = useTrip(tripId);
+  const queue = useQueue();
   const [photo, setPhoto] = useState<string | null>(null);
   const [amountText, setAmountText] = useState('');
   const [notes, setNotes] = useState('');
@@ -57,6 +62,17 @@ export default function ReportFormScreen() {
   const isOdo = type === 'ODOMETER_START' || type === 'ODOMETER_END';
   const isCost = COST_TYPES.includes(type);
   const amount = parseRupiah(amountText);
+  // Odometer order: start once, then end once (also checked by the server).
+  const odo = trip ? odometerButtons(trip, queue) : null;
+  const odoBlocked =
+    odo && type === 'ODOMETER_START' && !odo.canStart
+      ? 'Foto odometer awal sudah dikirim untuk tugas ini.'
+      : odo && type === 'ODOMETER_END' && !odo.canEnd
+        ? odo.end !== 'none'
+          ? 'Foto odometer akhir sudah dikirim untuk tugas ini.'
+          : 'Kirim foto odometer awal dulu, baru odometer akhir.'
+        : null;
+  const startKm = trip && type === 'ODOMETER_END' ? odometerStartKm(trip, queue) : null;
 
   const handlePick = (res: PickResult) => {
     if (!res) return;
@@ -68,8 +84,11 @@ export default function ReportFormScreen() {
   };
 
   const submit = async () => {
+    if (odoBlocked) return setError(odoBlocked);
     if (isOdo && !photo) return setError('Ambil foto odometer dulu, ya.');
     if (isOdo && amount == null) return setError('Isi angka odometer (km) sesuai foto.');
+    if (startKm != null && amount != null && amount < startKm)
+      return setError(`Angka akhir lebih kecil dari odometer awal (${formatKm(startKm)}). Cek lagi angkanya.`);
     if (isCost && (!amount || amount <= 0)) return setError('Isi jumlah biaya (Rp) dulu.');
     if (type === 'OTHER_COST' && !notes.trim()) return setError('Tulis biaya untuk apa di kolom catatan.');
     if (type === 'PHOTO' && !photo && !notes.trim()) return setError('Ambil foto atau tulis catatan dulu.');
@@ -108,22 +127,12 @@ export default function ReportFormScreen() {
           style={{ flex: 1, backgroundColor: colors.bg }}
           contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
           keyboardShouldPersistTaps="handled">
-          {isOdo ? (
-            <View style={styles.segment}>
-              {(['ODOMETER_START', 'ODOMETER_END'] as const).map((t) => (
-                <Pressable
-                  key={t}
-                  onPress={() => setType(t)}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected: type === t }}
-                  style={[styles.segmentBtn, type === t && styles.segmentOn]}>
-                  <Text style={[styles.segmentText, type === t && styles.segmentTextOn]}>
-                    {t === 'ODOMETER_START' ? 'Awal (berangkat)' : 'Akhir (selesai)'}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+          {odoBlocked ? (
+            <Banner tone="warning" icon="lock-closed-outline">
+              {odoBlocked}
+            </Banner>
           ) : null}
+          {startKm != null ? <Text style={styles.hintText}>{`Odometer awal: ${formatKm(startKm)}`}</Text> : null}
 
           <Text style={styles.label}>
             {isOdo ? 'Foto odometer' : isCost ? 'Foto struk (disarankan)' : 'Foto (boleh tidak ada)'}
@@ -202,7 +211,15 @@ export default function ReportFormScreen() {
             </Banner>
           ) : null}
 
-          <Button title="Kirim laporan" icon="send" big onPress={submit} loading={busy} testID="submit-report" />
+          <Button
+            title="Kirim laporan"
+            icon="send"
+            big
+            onPress={submit}
+            loading={busy}
+            disabled={!!odoBlocked}
+            testID="submit-report"
+          />
           <Button title="Batal" variant="ghost" onPress={() => router.back()} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -213,11 +230,7 @@ export default function ReportFormScreen() {
 const styles = StyleSheet.create({
   content: { padding: 16, gap: 12, maxWidth: 640, width: '100%', alignSelf: 'center' },
   label: { fontSize: font.body, fontWeight: '800', color: colors.navy, marginTop: 6 },
-  segment: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 14, padding: 4, gap: 4 },
-  segmentBtn: { flex: 1, minHeight: 52, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  segmentOn: { backgroundColor: colors.primary },
-  segmentText: { fontSize: font.small, fontWeight: '800', color: colors.navy, textAlign: 'center' },
-  segmentTextOn: { color: colors.white },
+  hintText: { fontSize: font.body, color: colors.textMuted, fontWeight: '700' },
   photoBox: {
     minHeight: 180,
     borderRadius: 18,

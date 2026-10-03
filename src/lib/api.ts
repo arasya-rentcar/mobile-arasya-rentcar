@@ -1,5 +1,5 @@
 import { API_URL } from './config';
-import type { DriverProfile, Report, Trip, TripDetail, User } from './types';
+import type { DriverProfile, NotificationPage, Report, Trip, TripDetail, User } from './types';
 
 /** `ApiError.status` when the request failed on the phone itself (e.g. the photo could not be read). */
 export const CLIENT_ERROR = -1;
@@ -124,7 +124,7 @@ export const api = {
   me: () => request<DriverProfile>('/driver/me'),
   trips: (scope: 'active' | 'history') => request<Trip[]>(`/driver/trips?scope=${scope}`),
   trip: (id: string) => request<TripDetail>(`/driver/trips/${encodeURIComponent(id)}`),
-  tripAction: (id: string, action: 'accept' | 'start' | 'arrive' | 'finish', body?: { notes?: string; occurred_at?: string; client_ref?: string }) =>
+  tripAction: (id: string, action: 'accept' | 'start' | 'arrive' | 'board' | 'finish', body?: Record<string, string | number | boolean>) =>
     request<Trip>(`/driver/trips/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: body ?? {} }),
   uploadReport: (id: string, form: FormData) =>
     request<Report>(`/driver/trips/${encodeURIComponent(id)}/reports`, {
@@ -132,6 +132,10 @@ export const api = {
       form,
       timeoutMs: 90000,
     }),
+  notifications: (before?: string) =>
+    request<NotificationPage>(`/driver/notifications${before ? `?before=${encodeURIComponent(before)}` : ''}`),
+  readNotifications: (input: { ids?: string[]; all?: boolean }) =>
+    request<{ updated: number; unread: number }>('/driver/notifications/read', { method: 'POST', body: input }),
   registerDevice: (token: string, platform: 'android' | 'ios') =>
     request<void>('/devices', { method: 'POST', body: { token, platform } }),
   unregisterDevice: (token: string, opts?: { skipAuthHandling?: boolean }) =>

@@ -21,7 +21,8 @@ function trip(t) {
   return {
     order_code: null, status: 'ASSIGNED', accepted_at: null, service_kind: null, service_package: null,
     notes: null, order_notes: null, passenger_count: null, other_customers: [], car: null,
-    actual_start_at: null, actual_pickup_at: null, trip_finished_at: null, ...t,
+    actual_start_at: null, actual_pickup_at: null, customer_onboard_at: null, trip_finished_at: null,
+    payment_ready: true, ...t,
   };
 }
 
@@ -56,12 +57,15 @@ const trips = [
     dropoff_location: 'Malioboro, Yogyakarta (keliling Jogja 3 hari)',
     service_kind: 'Sewa mobil + driver', service_package: 'ALL-IN', passenger_count: 6,
     notes: 'Paket ALL-IN: BBM, tol, parkir, dan makan driver ditanggung kantor. Simpan semua struk.',
+    // Only the DP is paid: the driver may drive there, "Mulai perjalanan" waits for full payment.
+    payment_ready: false,
     customer: { name: 'Keluarga Hartono', phone: '+62 813-5555-0101' },
     car: { plate_number: 'B 2468 TJA', model: 'Toyota Hiace Premio' },
   }),
   trip({
     id: 'line-done-cibubur', order_id: 'ord-090', order_code: 'ARS-2409-090', status: 'DONE',
     accepted_at: at(-1, '05:00'), actual_start_at: at(-1, '06:05'), actual_pickup_at: at(-1, '06:50'),
+    customer_onboard_at: at(-1, '07:00'),
     trip_finished_at: at(-1, '17:40'),
     service_date: wibDay(-1), start_at: at(-1, '07:00'), end_at: at(-1, '17:00'),
     pickup_location: 'Cibubur Junction, Jakarta Timur',
@@ -72,7 +76,7 @@ const trips = [
   }),
 ];
 
-// `is_system` rows (START / ARRIVE_CUSTOMER / FINISH) are written by the server itself when a trip
+// `is_system` rows (START / ARRIVE_CUSTOMER / ONBOARD / FINISH) are written by the server itself when a trip
 // is started, arrived at or finished; they are not driver reports and are not counted.
 const sys = (type, created_at) => ({ id: randomUUID(), report_type: type, notes: null, file_url: null, amount: null, created_at, is_system: true });
 const reports = {
@@ -80,7 +84,8 @@ const reports = {
     sys('START', at(-1, '06:05')),
     { id: randomUUID(), report_type: 'ODOMETER_START', notes: null, file_url: null, amount: 45210, created_at: at(-1, '06:00'), is_system: false },
     sys('ARRIVE_CUSTOMER', at(-1, '06:50')),
-    { id: randomUUID(), report_type: 'TOLL', notes: 'Tol Jagorawi', file_url: null, amount: 24500, created_at: at(-1, '07:30'), is_system: false },
+    { id: randomUUID(), report_type: 'TOLL', notes: 'Tol Jagorawi', file_url: null, amount: 24500, created_at: at(-1, '07:30'), is_system: false, expense_status: 'APPROVED' },
+    { id: randomUUID(), report_type: 'PARKING', notes: 'Parkir Kebun Raya', file_url: null, amount: 15000, created_at: at(-1, '09:10'), is_system: false, expense_status: 'REJECTED', review_note: 'Struk tidak terbaca' },
     { id: randomUUID(), report_type: 'ODOMETER_END', notes: 'Bensin sisa 1/2', file_url: null, amount: 45318, created_at: at(-1, '17:35'), is_system: false },
     sys('FINISH', at(-1, '17:40')),
   ],
@@ -92,6 +97,38 @@ function addSystemRow(tripId, type, created_at) {
   if (!list.some((r) => r.is_system && r.report_type === type)) list.push(sys(type, created_at));
 }
 const clientRefs = new Map(); // client_ref -> report
+const UNPAID =
+  'Order belum lunas. Perjalanan dengan pelanggan baru bisa dimulai setelah pelunasan tercatat (invoice ditandai terbayar). Hubungi admin.';
+const REPORT_TYPES = ['ODOMETER_START', 'ODOMETER_END', 'FUEL', 'TOLL', 'PARKING', 'OTHER_COST', 'PHOTO', 'NOTE', 'ARRIVAL_PHOTO'];
+
+// Inbox (GET /driver/notifications): every push the server sends is also stored there.
+const notifications = [
+  {
+    id: randomUUID(), type: 'payable_paid', title: 'Fee sudah dibayar', read: false, created_at: at(0, '09:15'),
+    body: `Rp 474.500 (transfer) untuk trip kemarin · ARS-2409-090.`,
+    data: { type: 'payable_paid', total: 474500, items: [{ order_code: 'ARS-2409-090', service_date: wibDay(-1), fee: 250000, reimburse: 24500, advance: 0, extras: 200000, total: 474500 }] },
+  },
+  {
+    id: randomUUID(), type: 'expense_rejected', title: 'Biaya ditolak', read: false, created_at: at(0, '08:40'),
+    body: 'Parkir Rp 15.000 · trip kemarin: Struk tidak terbaca', data: { type: 'expense_rejected', line_id: 'line-done-cibubur' },
+  },
+  {
+    id: randomUUID(), type: 'order_paid', title: 'Order ARS-2410-099 sudah lunas', read: true, created_at: at(-1, '20:05'),
+    body: 'Perjalanan bisa dimulai saat pelanggan naik: hari ini 08.00 · Hotel Indonesia Kempinski', data: { type: 'order_paid', line_id: 'line-jkt-bdg' },
+  },
+  {
+    id: randomUUID(), type: 'trip_assigned', title: 'Tugas baru', read: true, created_at: at(-1, '19:00'),
+    body: 'Besok 04.30 · Bogor Nirwana Residence → Bandara Soekarno-Hatta', data: { type: 'trip_assigned', line_id: 'line-new-bandara' },
+  },
+];
+const location = (f) =>
+  f.latitude != null && f.latitude !== '' && f.longitude != null && f.longitude !== ''
+    ? {
+        latitude: Number(f.latitude),
+        longitude: Number(f.longitude),
+        location_accuracy_m: f.location_accuracy_m != null && f.location_accuracy_m !== '' ? Math.round(Number(f.location_accuracy_m)) : null,
+      }
+    : {};
 const files = new Map(); // name -> Buffer
 const devices = new Set();
 
@@ -100,6 +137,7 @@ const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Accept',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Private-Network': 'true',
 };
 function send(res, status, body) {
   if (status === 204) {
@@ -159,6 +197,9 @@ const expensesOf = (id) =>
       type: r.report_type === 'OTHER_COST' ? 'OTHER' : r.report_type,
       amount: r.amount,
       note: r.notes,
+      // Every cost waits for the office to check the receipt.
+      status: r.expense_status || 'PENDING',
+      review_note: r.review_note || null,
       created_at: r.created_at,
     }));
 
@@ -214,6 +255,35 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/driver/me') return ok(res, driver);
 
+    if (req.method === 'GET' && p === '/driver/notifications') {
+      const list = [...notifications].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return ok(res, { unread: list.filter((n) => !n.read).length, items: list });
+    }
+    if (req.method === 'POST' && p === '/driver/notifications/read') {
+      const body = JSON.parse((await readBody(req)).toString() || '{}');
+      if (!body.all && !(Array.isArray(body.ids) && body.ids.length)) return fail(res, 400, 'ids or all is required');
+      let updated = 0;
+      for (const n of notifications) {
+        if (!n.read && (body.all || body.ids.includes(n.id))) {
+          n.read = true;
+          updated++;
+        }
+      }
+      return ok(res, { updated, unread: notifications.filter((n) => !n.read).length });
+    }
+    // Test helper: the admin records the settlement → "Mulai perjalanan" unlocks and a notification arrives.
+    const paid = /^\/driver\/__mock\/pay\/([^/]+)$/.exec(p);
+    if (req.method === 'POST' && paid) {
+      const t = trips.find((x) => x.id === paid[1]);
+      if (!t) return fail(res, 404, 'Tugas tidak ditemukan');
+      t.payment_ready = true;
+      notifications.push({
+        id: randomUUID(), type: 'order_paid', title: `Order ${t.order_code} sudah lunas`, read: false, created_at: now,
+        body: `Perjalanan bisa dimulai saat pelanggan naik · ${t.pickup_location}`, data: { type: 'order_paid', line_id: t.id },
+      });
+      return ok(res, withCount(t));
+    }
+
     if (req.method === 'GET' && p === '/driver/trips') {
       const scope = url.searchParams.get('scope') || 'active';
       const list =
@@ -223,7 +293,7 @@ const server = http.createServer(async (req, res) => {
       return ok(res, list.map(withCount));
     }
 
-    const m = /^\/driver\/trips\/([^/]+)(?:\/(accept|start|arrive|finish|reports))?$/.exec(p);
+    const m = /^\/driver\/trips\/([^/]+)(?:\/(accept|start|arrive|board|finish|reports))?$/.exec(p);
     if (!m) return fail(res, 404, 'Not found');
     const t = trips.find((x) => x.id === decodeURIComponent(m[1]));
     if (!t) return fail(res, 404, 'Tugas tidak ditemukan');
@@ -237,12 +307,27 @@ const server = http.createServer(async (req, res) => {
     if (action === 'reports') {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
       const { fields, files: fileParts } = parseMultipart(await readBody(req), req.headers['content-type']);
-      const types = ['ODOMETER_START', 'ODOMETER_END', 'FUEL', 'TOLL', 'PARKING', 'OTHER_COST', 'PHOTO', 'NOTE'];
-      if (!types.includes(fields.report_type)) return fail(res, 400, 'report_type tidak valid');
+      if (!REPORT_TYPES.includes(fields.report_type)) return fail(res, 400, 'report_type tidak valid');
       if (fields.client_ref && !UUID_RE.test(fields.client_ref)) return fail(res, 400, 'client_ref harus UUID');
       if (fields.occurred_at && Number.isNaN(Date.parse(fields.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
       if ((fileParts.photo?.data?.length || 0) > MAX_PHOTO_BYTES) return fail(res, 413, 'Ukuran foto maksimal 10 MB');
       if (fields.client_ref && clientRefs.has(fields.client_ref)) return ok(res, clientRefs.get(fields.client_ref));
+      const hasPhoto = !!fileParts.photo?.data?.length;
+      // Same rules as the real API: odometer start once, then end once and not lower.
+      if (fields.report_type.startsWith('ODOMETER')) {
+        if (!hasPhoto || !fields.amount) return fail(res, 400, 'Foto odometer perlu foto dan angka kilometer.');
+        const list = reports[t.id] || [];
+        const start = list.find((r) => r.report_type === 'ODOMETER_START');
+        if (fields.report_type === 'ODOMETER_START' && start) return fail(res, 409, 'Foto odometer awal sudah terkirim untuk tugas ini.');
+        if (fields.report_type === 'ODOMETER_END') {
+          if (!start) return fail(res, 409, 'Kirim foto odometer awal dulu, baru odometer akhir.');
+          if (list.some((r) => r.report_type === 'ODOMETER_END')) return fail(res, 409, 'Foto odometer akhir sudah terkirim untuk tugas ini.');
+          if (start.amount != null && Number(fields.amount) < start.amount)
+            return fail(res, 409, `Angka odometer akhir (${fields.amount} km) lebih kecil dari odometer awal (${start.amount} km).`);
+        }
+      }
+      if (fields.report_type === 'ARRIVAL_PHOTO' && (!hasPhoto || !fields.latitude))
+        return fail(res, 400, 'Foto sampai lokasi perlu foto dan lokasi GPS.');
       let file_url = null;
       if (fileParts.photo?.data?.length) {
         const name = `${randomUUID()}.jpg`;
@@ -252,7 +337,7 @@ const server = http.createServer(async (req, res) => {
       const amount = fields.amount ? parseInt(fields.amount, 10) : null;
       if (amount != null && (!Number.isInteger(amount) || amount < 0)) return fail(res, 400, 'amount tidak valid');
       // ODOMETER_* carry the odometer reading (km) in `amount`; cost types carry rupiah. Optional.
-      const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now, is_system: false };
+      const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now, is_system: false, ...location(fields) };
       (reports[t.id] ||= []).push(report);
       if (fields.client_ref) clientRefs.set(fields.client_ref, report);
       return ok(res, report);
@@ -278,8 +363,22 @@ const server = http.createServer(async (req, res) => {
       if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
       t.actual_pickup_at ||= at;
       addSystemRow(t.id, 'ARRIVE_CUSTOMER', at);
+      Object.assign(reports[t.id].find((r) => r.report_type === 'ARRIVE_CUSTOMER'), location(body));
+    } else if (action === 'board') {
+      // Same rule as the real API: the trip with the customer begins only when paid in full.
+      if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
+      if (!t.customer_onboard_at && t.payment_ready === false && !clientRefs.has(body.client_ref))
+        return fail(res, 409, UNPAID);
+      if (!t.customer_onboard_at) {
+        t.customer_onboard_at = at;
+        t.actual_start_at ||= at;
+        t.status = 'IN_PROGRESS';
+        addSystemRow(t.id, 'ONBOARD', at);
+        if (body.client_ref) clientRefs.set(body.client_ref, true);
+      }
     } else if (action === 'finish') {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
+      if (t.status !== 'DONE' && !t.customer_onboard_at && t.payment_ready === false) return fail(res, 409, UNPAID);
       if (t.status !== 'DONE') {
         t.accepted_at ||= at;
         t.status = 'DONE';

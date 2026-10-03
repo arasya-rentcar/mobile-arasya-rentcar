@@ -11,7 +11,7 @@ import { colors, font } from '@/lib/config';
 import { dayLabel, formatDateKey, todayKey, tripDateKey } from '@/lib/format';
 import { retryNow, useQueue } from '@/lib/queue';
 import { useSession } from '@/lib/session';
-import { useMe, useTrips } from '@/lib/trips';
+import { useMe, useNotifications, useTrips } from '@/lib/trips';
 import type { Trip } from '@/lib/types';
 
 type Scope = 'active' | 'history';
@@ -40,6 +40,8 @@ function TripsHome() {
   const insets = useSafeAreaInsets();
   const [scope, setScope] = useState<Scope>('active');
   const me = useMe();
+  const inbox = useNotifications();
+  const unread = inbox.data?.unread ?? 0;
   const active = useTrips('active');
   const history = useTrips('history');
   const queue = useQueue();
@@ -49,6 +51,7 @@ function TripsHome() {
     useCallback(() => {
       void active.refetch();
       void me.refetch();
+      void inbox.refetch();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []),
   );
@@ -59,7 +62,7 @@ function TripsHome() {
   const onRefresh = async () => {
     setRefreshing(true);
     retryNow();
-    await Promise.all([current.refetch(), me.refetch()]);
+    await Promise.all([current.refetch(), me.refetch(), inbox.refetch()]);
     setRefreshing(false);
   };
 
@@ -81,6 +84,22 @@ function TripsHome() {
             </Text>
             <Text style={styles.today}>{formatDateKey(todayKey(), true)}</Text>
           </View>
+          <Pressable
+            testID="open-notifications"
+            onPress={() => router.push('/notifications')}
+            style={styles.profileBtn}
+            accessibilityRole="button"
+            accessibilityLabel={unread ? `Notifikasi, ${unread} belum dibaca` : 'Notifikasi'}>
+            <View>
+              <Ionicons name="notifications-outline" size={30} color={colors.white} />
+              {unread > 0 ? (
+                <View style={styles.bellBadge}>
+                  <Text style={styles.bellBadgeText}>{unread > 99 ? '99+' : unread}</Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.profileText}>Notifikasi</Text>
+          </Pressable>
           <Pressable
             onPress={() => router.push('/profile')}
             style={styles.profileBtn}
@@ -197,6 +216,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   badgeText: { color: colors.navy, fontWeight: '900', fontSize: 14 },
+  bellBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -10,
+    backgroundColor: '#f0a43a',
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    borderWidth: 2,
+    borderColor: colors.navy,
+  },
+  bellBadgeText: { color: colors.navy, fontWeight: '900', fontSize: 12 },
   list: { padding: 16, gap: 0 },
   sectionTitle: { fontSize: font.large, fontWeight: '900', color: colors.navy, marginTop: 14, marginBottom: 10 },
 });

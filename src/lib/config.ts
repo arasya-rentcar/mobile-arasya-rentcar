@@ -1,5 +1,8 @@
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://api.haikuy.com/api/v1').replace(/\/+$/, '');
 
+/** Office WhatsApp (Arasya Rent Car official number), for "Hubungi admin". */
+export const ADMIN_WHATSAPP = '6282124024281';
+
 export const colors = {
   primary: '#046bd2',
   primaryDark: '#03539f',

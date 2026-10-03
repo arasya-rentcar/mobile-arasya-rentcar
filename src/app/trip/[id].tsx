@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,27 +10,39 @@ import { Stepper } from '@/components/Stepper';
 import { SyncBanners } from '@/components/SyncBanners';
 import { Banner, Button, Card, Chip, Dialog, EmptyState, SectionTitle, type IconName } from '@/components/ui';
 import { ApiError } from '@/lib/api';
-import { colors, font } from '@/lib/config';
+import { ADMIN_WHATSAPP, colors, font } from '@/lib/config';
 import { formatDateKey, formatRupiah, mapsUrl, telUrl, tripDateKey, tripDays, tripTimeText, waNumber, wibDateKey } from '@/lib/format';
 import { showNotice } from '@/lib/notices';
 import { useOnline } from '@/lib/network';
 import { retryNow, useQueue } from '@/lib/queue';
 import { useSession } from '@/lib/session';
 import { doTripAction, useTrip } from '@/lib/trips';
-import { ACTION_DONE_TEXT, ACTION_LABEL, nextAction, statusChip } from '@/lib/tripState';
-import type { Contact, ReportType, TripDetail } from '@/lib/types';
+import {
+  ACTION_DONE_TEXT,
+  ACTION_LABEL,
+  EXPENSE_STATUS,
+  nextAction,
+  odometerButtons,
+  statusChip,
+  unpaid,
+  waitingForPayment,
+  type ReportState,
+} from '@/lib/tripState';
+import type { Contact, Expense, ReportType } from '@/lib/types';
 
 const ACTION_ICON: Record<string, IconName> = {
   accept: 'checkmark-circle-outline',
   start: 'car-sport-outline',
   arrive: 'location-outline',
+  board: 'people-outline',
   finish: 'flag-outline',
 };
 
 const ACTION_HINT: Record<string, string> = {
   accept: 'Tekan untuk konfirmasi Anda siap menjalankan tugas ini.',
   start: 'Tekan saat Anda berangkat dari garasi.',
-  arrive: 'Tekan saat Anda sudah sampai di lokasi jemput.',
+  arrive: 'Tekan saat Anda sudah sampai di lokasi jemput. Anda akan diminta foto di lokasi (dengan GPS).',
+  board: 'Tekan saat pelanggan sudah naik dan perjalanan dimulai.',
   finish: 'Tekan setelah pelanggan diantar dan tugas selesai.',
 };
 
@@ -83,11 +95,23 @@ function TripDetailView({ id }: { id: string }) {
 
   const action = nextAction(trip);
   const chip = statusChip(trip);
+  const locked = waitingForPayment(trip);
+  const notPaidYet = unpaid(trip);
+  const askAdmin = () =>
+    open(
+      `https://wa.me/${ADMIN_WHATSAPP}?text=${encodeURIComponent(
+        `Halo admin, saya driver tugas ${trip.order_code ?? ''} (${trip.customer.name}). Saya sudah di lokasi jemput, pembayaran pelanggan belum lunas di aplikasi. Mohon dicek.`,
+      )}`,
+    );
 
   const runAction = () => {
-    if (!action) return;
+    if (!action || locked) return;
     if (action === 'finish') {
       setConfirmFinish(true);
+      return;
+    }
+    if (action === 'arrive') {
+      router.push({ pathname: '/arrive/[id]', params: { id: trip.id } });
       return;
     }
     doTripAction(trip.id, action);
@@ -104,9 +128,7 @@ function TripDetailView({ id }: { id: string }) {
   const openReport = (type: ReportType) =>
     router.push({ pathname: '/report/[id]', params: { id: trip.id, type } });
 
-  const hasOdoStart =
-    trip.reports.some((r) => r.report_type === 'ODOMETER_START') ||
-    pendingReports.some((q) => q.reportType === 'ODOMETER_START');
+  const odo = odometerButtons(trip, queue);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -118,7 +140,8 @@ function TripDetailView({ id }: { id: string }) {
   const startKey = tripDateKey(trip);
   const endKey = wibDateKey(trip.end_at);
   const days = tripDays(trip);
-  const expenseTotal = trip.expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  const countedExpenses = trip.expenses.filter((e) => e.status !== 'REJECTED');
+  const expenseTotal = countedExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
   return (
     <>
@@ -144,15 +167,31 @@ function TripDetailView({ id }: { id: string }) {
           )}
           {action ? (
             <View style={{ gap: 8 }}>
+              {locked ? (
+                <Banner tone="warning" icon="wallet-outline">
+                  Pelanggan belum lunas, jadi perjalanan belum boleh dimulai. Minta pelanggan melunasi pembayaran, lalu
+                  hubungi admin. Tombol aktif setelah admin mencatat pelunasan (Anda akan dapat notifikasi).
+                </Banner>
+              ) : notPaidYet ? (
+                <Banner tone="info" icon="wallet-outline">
+                  Pelanggan belum lunas. Anda tetap boleh berangkat ke lokasi jemput, tapi perjalanan baru bisa dimulai
+                  setelah lunas.
+                </Banner>
+              ) : null}
               <Button
                 testID="primary-action"
-                title={ACTION_LABEL[action]}
-                icon={ACTION_ICON[action]}
+                title={locked ? 'Mulai perjalanan (menunggu pelunasan)' : ACTION_LABEL[action]}
+                icon={locked ? 'lock-closed-outline' : ACTION_ICON[action]}
                 variant={action === 'finish' ? 'navy' : 'primary'}
                 big
+                disabled={locked}
                 onPress={runAction}
               />
-              <Text style={styles.hint}>{ACTION_HINT[action]}</Text>
+              {locked ? (
+                <Button title="Hubungi admin (WhatsApp)" icon="logo-whatsapp" variant="whatsapp" onPress={askAdmin} />
+              ) : (
+                <Text style={styles.hint}>{ACTION_HINT[action]}</Text>
+              )}
             </View>
           ) : trip.status === 'DONE' ? (
             <Banner tone="success" icon="checkmark-circle">
@@ -225,11 +264,20 @@ function TripDetailView({ id }: { id: string }) {
         <SectionTitle>Laporan & biaya</SectionTitle>
         {trip.status === 'CANCELLED' ? null : (
           <View style={styles.grid}>
-            <ReportButton
-              icon="speedometer-outline"
-              label={hasOdoStart ? 'Foto odometer akhir' : 'Foto odometer awal'}
-              onPress={() => openReport(hasOdoStart ? 'ODOMETER_END' : 'ODOMETER_START')}
-              wide
+            <OdometerButton
+              testID="odo-start"
+              label="Odometer awal"
+              state={odo.start}
+              enabled={odo.canStart}
+              onPress={() => openReport('ODOMETER_START')}
+            />
+            <OdometerButton
+              testID="odo-end"
+              label="Odometer akhir"
+              state={odo.end}
+              enabled={odo.canEnd}
+              lockedHint={odo.start === 'failed' ? 'Odometer awal gagal dikirim' : 'Kirim odometer awal dulu'}
+              onPress={() => openReport('ODOMETER_END')}
             />
             <ReportButton icon="water-outline" label="Bensin" onPress={() => openReport('FUEL')} />
             <ReportButton icon="git-network-outline" label="Tol" onPress={() => openReport('TOLL')} />
@@ -238,9 +286,7 @@ function TripDetailView({ id }: { id: string }) {
             <ReportButton icon="camera-outline" label="Foto / Catatan" onPress={() => openReport('PHOTO')} wide />
           </View>
         )}
-        {expenseTotal > 0 ? (
-          <Text style={styles.total}>{`Total biaya tercatat: ${formatRupiah(expenseTotal)}`}</Text>
-        ) : null}
+        {trip.expenses.length ? <ExpenseList expenses={trip.expenses} total={expenseTotal} /> : null}
         <ReportList reports={trip.reports} pending={pendingReports} />
       </ScrollView>
 
@@ -330,6 +376,79 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
+const ODO_STATE_TEXT: Record<ReportState, string> = {
+  sent: 'Terkirim',
+  pending: 'Menunggu dikirim',
+  failed: 'Gagal dikirim, lihat di bawah',
+  none: '',
+};
+
+/** One odometer photo: tappable only when it is its turn (start first, then end, once each). */
+function OdometerButton({
+  label,
+  state,
+  enabled,
+  lockedHint,
+  onPress,
+  testID,
+}: {
+  label: string;
+  state: ReportState;
+  enabled: boolean;
+  lockedHint?: string;
+  onPress: () => void;
+  testID?: string;
+}) {
+  const done = state !== 'none';
+  const sub = done ? ODO_STATE_TEXT[state] : enabled ? 'Ketuk untuk foto' : lockedHint ?? '';
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      disabled={!enabled}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !enabled }}
+      accessibilityLabel={`${label}. ${sub}`}
+      style={({ pressed }) => [
+        styles.odo,
+        done && (state === 'failed' ? styles.odoFailed : styles.odoDone),
+        !enabled && !done && styles.odoLocked,
+        pressed && enabled && { opacity: 0.8 },
+      ]}>
+      <Ionicons
+        name={state === 'sent' ? 'checkmark-circle' : state === 'failed' ? 'alert-circle' : enabled ? 'speedometer-outline' : 'lock-closed-outline'}
+        size={26}
+        color={state === 'sent' ? colors.success : state === 'failed' ? colors.danger : enabled ? colors.primary : colors.textMuted}
+      />
+      <Text style={[styles.odoLabel, !enabled && !done && { color: colors.textMuted }]}>{label}</Text>
+      {sub ? <Text style={styles.odoSub}>{sub}</Text> : null}
+    </Pressable>
+  );
+}
+
+/** Costs sent for this trip with the office's review (approved costs are reimbursed). */
+function ExpenseList({ expenses, total }: { expenses: Expense[]; total: number }) {
+  const LABEL: Record<string, string> = { FUEL: 'Bensin', TOLL: 'Tol', PARKING: 'Parkir', OTHER: 'Biaya lain' };
+  return (
+    <Card style={{ gap: 10 }}>
+      <InfoLabel icon="receipt-outline">Biaya perjalanan</InfoLabel>
+      {expenses.map((e) => {
+        const st = e.status ? EXPENSE_STATUS[e.status] : null;
+        return (
+          <View key={e.id} style={{ gap: 4 }}>
+            <View style={styles.expenseRow}>
+              <Text style={[styles.body, { flex: 1 }]}>{`${LABEL[e.type] ?? e.type} ${formatRupiah(e.amount)}`}</Text>
+              {st ? <Chip label={st.label} tone={st.tone} /> : null}
+            </View>
+            {e.status === 'REJECTED' && e.review_note ? <Text style={styles.reject}>{`Alasan: ${e.review_note}`}</Text> : null}
+          </View>
+        );
+      })}
+      <Text style={styles.total}>{`Total (tanpa yang ditolak): ${formatRupiah(total)}`}</Text>
+    </Card>
+  );
+}
+
 function ReportButton({ icon, label, onPress, wide }: { icon: IconName; label: string; onPress: () => void; wide?: boolean }) {
   return (
     <Button
@@ -370,6 +489,26 @@ const styles = StyleSheet.create({
   reportBtn: { flexBasis: '47%', flexGrow: 1, minHeight: 60 },
   reportBtnWide: { flexBasis: '100%' },
   total: { fontSize: font.body, fontWeight: '800', color: colors.navy },
+  expenseRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  reject: { fontSize: font.small, color: colors.danger },
+  odo: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    minHeight: 84,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    gap: 2,
+  },
+  odoDone: { borderColor: '#9fd5b1', backgroundColor: colors.successSoft },
+  odoFailed: { borderColor: '#e8a0a0', backgroundColor: '#fff5f5' },
+  odoLocked: { borderColor: colors.border, backgroundColor: colors.surface },
+  odoLabel: { fontSize: font.body, fontWeight: '800', color: colors.navy, textAlign: 'center' },
+  odoSub: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
   noteInput: {
     minHeight: 90,
     borderWidth: 2,

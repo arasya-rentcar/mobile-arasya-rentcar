@@ -13,6 +13,11 @@ export type PickResult = { uri: string } | { error: string } | null;
 
 const SHRINK_FAILED = 'Foto tidak bisa diproses. Coba ambil ulang.';
 
+/** Resize + re-encode a photo taken outside the image picker (e.g. the GPS camera). */
+export async function shrinkUri(uri: string, width?: number, height?: number): Promise<string> {
+  return shrink({ uri, width: width ?? 0, height: height ?? 0 } as ImagePicker.ImagePickerAsset);
+}
+
 /**
  * Resize and re-encode as JPEG so uploads stay small. If resizing fails it is retried at a smaller
  * size; the raw original is never used as a fallback (it can be many MB and would be refused by

@@ -6,7 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
 const STORAGE_KEY = 'arasya.cache.v1';
-const PERSISTED_ROOTS = new Set(['me', 'trips', 'trip']);
+const PERSISTED_ROOTS = new Set(['me', 'trips', 'trip', 'notifications']);
 
 type Saved = { key: QueryKey; data: unknown; updatedAt: number }[];
 

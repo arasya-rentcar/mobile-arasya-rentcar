@@ -11,11 +11,11 @@ import '@/lib/backgroundSync'; // registers the background queue task (also for 
 import { persistCache } from '@/lib/cache';
 import { colors } from '@/lib/config';
 import { onReconnect } from '@/lib/network';
-import { addPushListeners, takeLaunchTripId } from '@/lib/push';
+import { addPushListeners, takeLaunchNotification, type PushData } from '@/lib/push';
 import { processQueue, retryNow, setQueueGate, setQueueHandlers } from '@/lib/queue';
 import { queryClient } from '@/lib/queryClient';
 import { SessionProvider, useSession } from '@/lib/session';
-import { keys, queueHandlers } from '@/lib/trips';
+import { keys, markNotificationsRead, queueHandlers } from '@/lib/trips';
 
 if (Platform.OS !== 'web') void SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -67,26 +67,33 @@ function AppNavigator() {
     });
   }, [isDriver]);
 
-  // Push: refresh on arrival, open the trip on tap (also when the tap started the app).
+  // Push: refresh on arrival; on tap open the trip, or the inbox for pushes about money (also
+  // when the tap started the app). The tapped notification is marked read in the inbox.
   const launchHandled = useRef(false);
   useEffect(() => {
     if (!isDriver) return;
-    const openTrip = (id: string | null) => {
+    const openFromPush = (id: string | null, data: PushData) => {
       void queryClient.invalidateQueries({ queryKey: ['trips'] });
-      if (!id) return;
-      void queryClient.invalidateQueries({ queryKey: keys.trip(id) });
-      router.push({ pathname: '/trip/[id]', params: { id } });
+      void queryClient.invalidateQueries({ queryKey: keys.notifications });
+      if (data.notification_id) void markNotificationsRead({ ids: [data.notification_id] });
+      if (id && data.type !== 'trip_updated') {
+        void queryClient.invalidateQueries({ queryKey: keys.trip(id) });
+        router.push({ pathname: '/trip/[id]', params: { id } });
+      } else {
+        router.push('/notifications');
+      }
     };
     if (!launchHandled.current) {
       launchHandled.current = true;
-      void takeLaunchTripId().then((id) => id && setTimeout(() => openTrip(id), 300));
+      void takeLaunchNotification().then((n) => n && setTimeout(() => openFromPush(n.tripId, n.data), 300));
     }
     return addPushListeners({
       onReceive: (data) => {
         void queryClient.invalidateQueries({ queryKey: ['trips'] });
+        void queryClient.invalidateQueries({ queryKey: keys.notifications });
         if (data.line_id) void queryClient.invalidateQueries({ queryKey: keys.trip(data.line_id) });
       },
-      onOpen: (id) => openTrip(id),
+      onOpen: (id, data) => openFromPush(id, data),
     });
   }, [isDriver]);
 
@@ -106,6 +113,8 @@ function AppNavigator() {
         <Stack.Screen name="admin" options={{ title: 'Arasya Driver' }} />
         <Stack.Screen name="trip/[id]" options={{ title: 'Detail tugas' }} />
         <Stack.Screen name="report/[id]" options={{ title: 'Kirim laporan', presentation: 'modal' }} />
+        <Stack.Screen name="arrive/[id]" options={{ title: 'Sampai di lokasi jemput', presentation: 'modal' }} />
+        <Stack.Screen name="notifications" options={{ title: 'Notifikasi' }} />
         <Stack.Screen name="profile" options={{ title: 'Profil' }} />
       </Stack>
       {session.status === 'loading' ? (

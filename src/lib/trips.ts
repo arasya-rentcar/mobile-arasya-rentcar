@@ -6,16 +6,39 @@ import { showNotice } from './notices';
 import { dropTripItems, enqueue, sendNow, useQueue, type QueueItem, type TripAction } from './queue';
 import { queryClient } from './queryClient';
 import { applyPending } from './tripState';
-import type { Trip, TripDetail } from './types';
+import type { GpsFix, NotificationPage, Trip, TripDetail } from './types';
 
 export const keys = {
   me: ['me'] as const,
+  notifications: ['notifications'] as const,
   trips: (scope: 'active' | 'history') => ['trips', scope] as const,
   trip: (id: string) => ['trip', id] as const,
 };
 
 export function useMe(enabled = true) {
   return useQuery({ queryKey: keys.me, queryFn: api.me, enabled });
+}
+
+/** The inbox (newest 50) and the unread count for the bell badge. */
+export function useNotifications(enabled = true) {
+  return useQuery<NotificationPage>({ queryKey: keys.notifications, queryFn: () => api.notifications(), enabled });
+}
+
+/** Marks notifications read on the server; the badge updates right away. */
+export async function markNotificationsRead(input: { ids?: string[]; all?: boolean }) {
+  queryClient.setQueryData<NotificationPage>(keys.notifications, (old) => {
+    if (!old) return old;
+    const hit = (id: string) => input.all || input.ids?.includes(id);
+    const items = old.items.map((n) => (hit(n.id) ? { ...n, read: true } : n));
+    const newlyRead = old.items.filter((n) => !n.read && hit(n.id)).length;
+    return { items, unread: input.all ? 0 : Math.max(0, old.unread - newlyRead) };
+  });
+  try {
+    const r = await api.readNotifications(input);
+    queryClient.setQueryData<NotificationPage>(keys.notifications, (old) => (old ? { ...old, unread: r.unread } : old));
+  } catch {
+    // Offline: shown as read here; the server catches up on the next refresh.
+  }
 }
 
 export function useTrips(scope: 'active' | 'history') {
@@ -93,8 +116,8 @@ export const queueHandlers = {
   },
 };
 
-export function doTripAction(tripId: string, kind: TripAction, notes?: string) {
-  return enqueue({ tripId, kind, notes: notes?.trim() || undefined });
+export function doTripAction(tripId: string, kind: TripAction, notes?: string, location?: GpsFix | null) {
+  return enqueue({ tripId, kind, notes: notes?.trim() || undefined, location: location ?? undefined });
 }
 
 let sendingNow = false;
