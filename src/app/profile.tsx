@@ -1,14 +1,17 @@
-import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
+import { useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { EtollRequest } from '@/components/EtollRequest';
 import { Banner, Button, Card, Dialog } from '@/components/ui';
 import { API_URL, colors, font } from '@/lib/config';
 import { useOnline } from '@/lib/network';
 import { useQueue } from '@/lib/queue';
 import { useSession } from '@/lib/session';
-import { sendQueueNow, useMe, useSendingNow } from '@/lib/trips';
+import { keys, sendQueueNow, useMe, useSendingNow } from '@/lib/trips';
+import { queryClient } from '@/lib/queryClient';
 
 const STATUS_TEXT: Record<string, string> = {
   AVAILABLE: 'Siap tugas',
@@ -18,12 +21,28 @@ const STATUS_TEXT: Record<string, string> = {
 
 export default function ProfileScreen() {
   const session = useSession();
+  const isDriver = session.status === 'signedIn' && session.user.role === 'DRIVER';
   const me = useMe(session.status === 'signedIn');
   const queue = useQueue();
   const online = useOnline();
   const sending = useSendingNow();
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // The office may have changed the e-toll card: fresh profile whenever the page comes into view.
+  const refetchMe = me.refetch;
+  useFocusEffect(
+    useCallback(() => {
+      if (session.status === 'signedIn') void refetchMe();
+    }, [session.status, refetchMe]),
+  );
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([me.refetch(), isDriver ? queryClient.refetchQueries({ queryKey: keys.requests }) : null]);
+    setRefreshing(false);
+  };
 
   const logout = async () => {
     setBusy(true);
@@ -38,7 +57,11 @@ export default function ProfileScreen() {
   const version = Constants.expoConfig?.version ?? '1.0.0';
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.surface }} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: colors.surface }}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}>
       <Card style={styles.profile}>
         <View style={styles.avatar}>
           <Ionicons name="person" size={44} color={colors.white} />
@@ -52,6 +75,8 @@ export default function ProfileScreen() {
           </View>
         ) : null}
       </Card>
+
+      {isDriver ? <EtollRequest etollCard={me.data?.etoll_card} enabled={isDriver} /> : null}
 
       {queue.length ? (
         <Card style={{ gap: 10 }}>

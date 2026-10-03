@@ -8,7 +8,7 @@ import { Banner, Button, EmptyState, type IconName } from '@/components/ui';
 import { colors, font } from '@/lib/config';
 import { formatDateTime, formatRupiah, formatShortDate, wibDateKey } from '@/lib/format';
 import { useSession } from '@/lib/session';
-import { markNotificationsRead, useNotifications } from '@/lib/trips';
+import { isRequestNotice, markNotificationsRead, useNotifications } from '@/lib/trips';
 import type { AppNotification } from '@/lib/types';
 
 const ICON: Record<string, { name: IconName; color: string }> = {
@@ -19,6 +19,7 @@ const ICON: Record<string, { name: IconName; color: string }> = {
   payable_paid: { name: 'cash', color: colors.success },
   expense_rejected: { name: 'close-circle', color: colors.danger },
 };
+const REQUEST_ICON = { name: 'card' as IconName, color: colors.success };
 
 export default function NotificationsScreen() {
   const session = useSession();
@@ -44,6 +45,8 @@ function NotificationsView() {
     const lineId = typeof n.data?.line_id === 'string' ? n.data.line_id : null;
     // A trip that was moved to another driver is no longer viewable.
     if (lineId && n.type !== 'trip_updated') router.push({ pathname: '/trip/[id]', params: { id: lineId } });
+    // e.g. "Top-up e-toll sudah diproses": the request status is on the profile.
+    else if (isRequestNotice(n.type)) router.push('/profile');
   };
 
   return (
@@ -93,7 +96,7 @@ function NotificationsView() {
 type PayItem = { order_code?: string | null; service_date?: string | null; fee?: number; reimburse?: number; advance?: number; extras?: number; total?: number };
 
 function Row({ n, onPress }: { n: AppNotification; onPress: () => void }) {
-  const icon = ICON[n.type] ?? { name: 'notifications' as IconName, color: colors.navy };
+  const icon = ICON[n.type] ?? (isRequestNotice(n.type) ? REQUEST_ICON : { name: 'notifications' as IconName, color: colors.navy });
   const payItems = n.type === 'payable_paid' && Array.isArray(n.data?.items) ? (n.data.items as PayItem[]) : [];
   return (
     <Pressable

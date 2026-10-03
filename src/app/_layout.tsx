@@ -15,7 +15,7 @@ import { addPushListeners, takeLaunchNotification, type PushData } from '@/lib/p
 import { processQueue, retryNow, setQueueGate, setQueueHandlers } from '@/lib/queue';
 import { queryClient } from '@/lib/queryClient';
 import { SessionProvider, useSession } from '@/lib/session';
-import { keys, markNotificationsRead, queueHandlers } from '@/lib/trips';
+import { isRequestNotice, keys, markNotificationsRead, queueHandlers } from '@/lib/trips';
 
 if (Platform.OS !== 'web') void SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -67,19 +67,23 @@ function AppNavigator() {
     });
   }, [isDriver]);
 
-  // Push: refresh on arrival; on tap open the trip, or the inbox for pushes about money (also
-  // when the tap started the app). The tapped notification is marked read in the inbox.
+  // Push: refresh on arrival; on tap open the trip, the profile for a handled request (e-toll
+  // top-up), or the inbox for pushes about money (also when the tap started the app). The
+  // tapped notification is marked read in the inbox.
   const launchHandled = useRef(false);
   useEffect(() => {
     if (!isDriver) return;
     const openFromPush = (id: string | null, data: PushData) => {
       void queryClient.invalidateQueries({ queryKey: ['trips'] });
+      if (isRequestNotice(data.type)) void queryClient.invalidateQueries({ queryKey: keys.requests });
       // Marking read refreshes the inbox itself (after the server has it).
       if (data.notification_id) void markNotificationsRead({ ids: [data.notification_id] });
       else void queryClient.invalidateQueries({ queryKey: keys.notifications });
       if (id && data.type !== 'trip_updated') {
         void queryClient.invalidateQueries({ queryKey: keys.trip(id) });
         router.push({ pathname: '/trip/[id]', params: { id } });
+      } else if (isRequestNotice(data.type)) {
+        router.push('/profile');
       } else {
         router.push('/notifications');
       }
@@ -92,6 +96,8 @@ function AppNavigator() {
       onReceive: (data) => {
         void queryClient.invalidateQueries({ queryKey: ['trips'] });
         void queryClient.invalidateQueries({ queryKey: keys.notifications });
+        // e.g. "Top-up e-toll sudah diproses": the profile shows the request as handled.
+        if (isRequestNotice(data.type)) void queryClient.invalidateQueries({ queryKey: keys.requests });
         if (data.line_id) void queryClient.invalidateQueries({ queryKey: keys.trip(data.line_id) });
       },
       onOpen: (id, data) => openFromPush(id, data),

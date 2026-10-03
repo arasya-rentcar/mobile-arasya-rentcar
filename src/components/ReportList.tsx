@@ -5,8 +5,9 @@ import { API_URL, colors, font } from '@/lib/config';
 import { formatDateTime } from '@/lib/format';
 import type { QueueItem } from '@/lib/queue';
 import { discardItem, retryFailed } from '@/lib/queue';
-import { formatReportAmount, REPORT_LABEL } from '@/lib/tripState';
+import { checkpointNumbers, formatReportAmount, REPORT_LABEL } from '@/lib/tripState';
 import type { Report } from '@/lib/types';
+import { PlaceLine } from './PlaceLine';
 import { Button, Chip } from './ui';
 
 function absoluteUrl(url: string) {
@@ -30,10 +31,14 @@ type Row = {
   amount: number | null;
   photo: string | null;
   at: string;
+  /** Where the photo was taken (arrival and checkpoint photos). */
+  place?: { name: string | null; latitude: number; longitude: number; accuracy: number | null; mocked?: boolean };
   pending?: { attempts: number; lastError?: string; failed?: boolean };
 };
 
 export function ReportList({ reports, pending }: { reports: Report[]; pending: QueueItem[] }) {
+  // "Checkpoint 1, 2, …" in the order the photos were taken.
+  const checkpoints = checkpointNumbers(reports, pending);
   const rows: Row[] = [
     ...pending.map((q) => ({
       key: q.id,
@@ -42,6 +47,15 @@ export function ReportList({ reports, pending }: { reports: Report[]; pending: Q
       amount: q.amount ?? null,
       photo: q.photoUri ?? null,
       at: q.createdAt,
+      place: q.location
+        ? {
+            name: q.location.name ?? null,
+            latitude: q.location.latitude,
+            longitude: q.location.longitude,
+            accuracy: q.location.accuracy,
+            mocked: q.location.mocked,
+          }
+        : undefined,
       pending: { attempts: q.attempts, lastError: q.lastError, failed: q.failed },
     })),
     ...reports
@@ -54,6 +68,15 @@ export function ReportList({ reports, pending }: { reports: Report[]; pending: Q
         amount: r.amount,
         photo: r.file_url ? absoluteUrl(r.file_url) : null,
         at: r.created_at,
+        place:
+          r.latitude != null && r.longitude != null
+            ? {
+                name: r.location_name ?? null,
+                latitude: r.latitude,
+                longitude: r.longitude,
+                accuracy: r.location_accuracy_m ?? null,
+              }
+            : undefined,
       })),
   ];
 
@@ -74,7 +97,9 @@ export function ReportList({ reports, pending }: { reports: Report[]; pending: Q
           )}
           <View style={{ flex: 1, gap: 4 }}>
             <View style={styles.titleRow}>
-              <Text style={styles.type}>{REPORT_LABEL[r.type] ?? r.type}</Text>
+              <Text style={styles.type}>
+                {checkpoints.has(r.key) ? `Checkpoint ${checkpoints.get(r.key)}` : (REPORT_LABEL[r.type] ?? r.type)}
+              </Text>
               {r.amount != null ? <Text style={styles.amount}>{formatReportAmount(r.type, r.amount)}</Text> : null}
             </View>
             {r.notes ? (
@@ -82,6 +107,7 @@ export function ReportList({ reports, pending }: { reports: Report[]; pending: Q
                 {r.notes}
               </Text>
             ) : null}
+            {r.place ? <PlaceLine {...r.place} small /> : null}
             <Text style={styles.at}>{formatDateTime(r.at)}</Text>
             {r.pending ? (
               r.pending.failed ? (

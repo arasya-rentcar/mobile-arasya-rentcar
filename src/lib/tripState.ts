@@ -1,9 +1,24 @@
 import { formatKm, formatRupiah } from './format';
 import type { QueueItem, TripAction } from './queue';
-import type { ReportType, Trip, TripDetail } from './types';
+import type { Report, ReportType, Trip, TripDetail } from './types';
 
+/** When the driver pressed "Terima tugas" (the server's `driver_accepted_at`), or null. */
+export function acceptedAt(t: Trip): string | null {
+  return t.accepted_at ?? t.driver_accepted_at ?? null;
+}
+
+/**
+ * Accepted means the driver pressed "Terima tugas" (`driver_accepted_at` is set). ASSIGNED is not
+ * an acceptance: it only says the office gave the day a driver. A trip that is already running or
+ * done counts as accepted (the server records the acceptance with the first step anyway).
+ */
 export function isAccepted(t: Trip) {
-  return !!t.accepted_at || t.status === 'ASSIGNED' || t.status === 'IN_PROGRESS' || t.status === 'DONE';
+  return !!acceptedAt(t) || !!t.actual_start_at || t.status === 'IN_PROGRESS' || t.status === 'DONE';
+}
+
+/** Still waiting for "Terima tugas" (counted in the Tugas badge). */
+export function waitingForAcceptance(t: Trip) {
+  return (t.status === 'SCHEDULED' || t.status === 'ASSIGNED') && !isAccepted(t);
 }
 
 export type Chip = { label: string; tone: 'new' | 'accepted' | 'running' | 'done' | 'cancelled' };
@@ -155,3 +170,30 @@ export const EXPENSE_STATUS: Record<string, { label: string; tone: 'pending' | '
   APPROVED: { label: 'Disetujui', tone: 'running' },
   REJECTED: { label: 'Ditolak', tone: 'cancelled' },
 };
+
+/** A checkpoint is a "Foto / Catatan" photo from the GPS camera (it carries a location). */
+export function isCheckpointReport(r: Pick<Report, 'report_type' | 'latitude'>) {
+  return r.report_type === 'PHOTO' && r.latitude != null;
+}
+
+export function isCheckpointItem(q: QueueItem) {
+  return q.kind === 'report' && q.reportType === 'PHOTO' && !!q.location;
+}
+
+const time = (iso: string) => Date.parse(iso) || 0;
+
+/** "Checkpoint N" numbers in the order the photos were taken (sent and still on the phone): key → N. */
+export function checkpointNumbers(reports: Report[], pending: QueueItem[]): Map<string, number> {
+  const all = [
+    ...reports.filter(isCheckpointReport).map((r) => ({ key: r.id, at: time(r.created_at) })),
+    ...pending.filter(isCheckpointItem).map((q) => ({ key: q.id, at: time(q.createdAt) })),
+  ].sort((a, b) => a.at - b.at);
+  return new Map(all.map((x, i) => [x.key, i + 1]));
+}
+
+/** N for the next checkpoint photo of this trip: those sent or waiting to be sent, plus one. */
+export function nextCheckpointNumber(trip: TripDetail, queue: QueueItem[]): number {
+  const sent = trip.reports.filter(isCheckpointReport).length;
+  const queued = queue.filter((q) => q.tripId === trip.id && isCheckpointItem(q)).length;
+  return sent + queued + 1;
+}

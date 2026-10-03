@@ -3,18 +3,28 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { api, ApiError } from './api';
 import { showNotice } from './notices';
-import { dropTripItems, enqueue, sendNow, useQueue, type QueueItem, type TripAction } from './queue';
+import {
+  dropTripItems,
+  enqueue,
+  REQUESTS_QUEUE_ID,
+  sendNow,
+  useQueue,
+  type DriverRequestInput,
+  type QueueItem,
+  type TripAction,
+} from './queue';
 import { queryClient } from './queryClient';
 import { applyPending } from './tripState';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { GpsFix, NotificationPage, Report, Trip, TripDetail } from './types';
+import type { DriverRequest, DriverRequestResult, GpsFix, NotificationPage, Report, Trip, TripDetail } from './types';
 
 export const keys = {
   me: ['me'] as const,
   notifications: ['notifications'] as const,
   trips: (scope: 'active' | 'history') => ['trips', scope] as const,
   trip: (id: string) => ['trip', id] as const,
+  requests: ['requests'] as const,
 };
 
 export function useMe(enabled = true) {
@@ -98,6 +108,34 @@ export async function markNotificationsRead(input: { ids?: string[]; all?: boole
   if (await flushPendingReads()) void queryClient.invalidateQueries({ queryKey: keys.notifications });
 }
 
+/**
+ * The driver's requests to the office (newest first). `all` so the screen can also say when the
+ * last one was handled; the open one is picked out by the screen.
+ */
+export function useDriverRequests(enabled = true) {
+  return useQuery({
+    queryKey: keys.requests,
+    queryFn: async () => (await api.requests('all')).items ?? [],
+    enabled,
+  });
+}
+
+/** Inbox/push types about a driver request (e.g. the office topped up the e-toll card). */
+export function isRequestNotice(type: unknown): boolean {
+  return typeof type === 'string' && /request|etoll|topup|top_up/i.test(type);
+}
+
+/** "Minta top-up e-toll": goes through the offline queue (client_ref = item id, sent once). */
+export function requestEtollTopup(input: Omit<DriverRequestInput, 'type'>) {
+  return enqueue({ tripId: REQUESTS_QUEUE_ID, kind: 'request', request: { type: 'ETOLL_TOPUP', ...input } });
+}
+
+function putRequest(request: DriverRequest) {
+  queryClient.setQueryData<DriverRequest[]>(keys.requests, (old) =>
+    old ? [request, ...old.filter((r) => r.id !== request.id)] : [request],
+  );
+}
+
 export function useTrips(scope: 'active' | 'history') {
   const query = useQuery({ queryKey: keys.trips(scope), queryFn: () => api.trips(scope) });
   const queue = useQueue();
@@ -166,10 +204,26 @@ export const queueHandlers = {
     void queryClient.invalidateQueries({ queryKey: keys.trip(item.tripId) });
     void queryClient.invalidateQueries({ queryKey: ['trips'] });
   },
+  onRequestDone(_item: QueueItem, result: DriverRequestResult) {
+    if (result.request?.id) putRequest(result.request);
+    void queryClient.invalidateQueries({ queryKey: keys.requests });
+    showNotice(
+      result.already_open
+        ? 'Permintaan top-up sebelumnya masih menunggu admin. Tidak perlu minta lagi.'
+        : 'Permintaan top-up e-toll sudah sampai ke admin.',
+      result.already_open ? 'info' : 'success',
+      6000,
+    );
+  },
   onTripGone(tripId: string, dropped: QueueItem[]) {
     tripGone(queryClient, tripId, dropped);
   },
   onRejected(item: QueueItem, message: string) {
+    if (item.kind === 'request') {
+      showNotice(`Permintaan top-up tidak bisa dikirim: ${message}`, 'error', 8000);
+      void queryClient.invalidateQueries({ queryKey: keys.requests });
+      return;
+    }
     const what = item.kind === 'report' ? 'Laporan' : 'Perubahan status';
     showNotice(`${what} tidak bisa dikirim: ${message}`, 'error', 8000);
     void queryClient.invalidateQueries({ queryKey: keys.trip(item.tripId) });
