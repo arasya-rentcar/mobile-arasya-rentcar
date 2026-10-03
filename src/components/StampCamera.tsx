@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { colors } from '@/lib/config';
+import { formatDateKey, formatTime, wibDateKey } from '@/lib/format';
 import { formatFix, watchFix } from '@/lib/location';
 import { shrinkUri } from '@/lib/photos';
 import type { GpsFix } from '@/lib/types';
@@ -42,17 +43,12 @@ export type StampedPhoto = {
 
 export type GpsProblem = { error: string; needsSettings?: boolean; noFix?: boolean };
 
-const DAYS = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-const pad = (n: number) => String(n).padStart(2, '0');
 
 /** Wall clock in WIB (UTC+7), whatever the phone's time zone. */
 function wibParts(d: Date) {
-  const w = new Date(d.getTime() + 7 * 3600_000);
-  return {
-    time: `${pad(w.getUTCHours())}.${pad(w.getUTCMinutes())}`,
-    date: `${DAYS[w.getUTCDay()]}, ${w.getUTCDate()} ${MONTHS[w.getUTCMonth()]} ${w.getUTCFullYear()}`,
-  };
+  const iso = d.toISOString();
+  const key = wibDateKey(iso);
+  return { time: formatTime(iso) ?? '', date: key ? formatDateKey(key) : '' };
 }
 
 /**
@@ -103,6 +99,7 @@ export function StampCamera({
   onClose,
   onCaptured,
   onGpsProblem,
+  onCameraProblem,
 }: {
   visible: boolean;
   info: StampInfo;
@@ -110,6 +107,8 @@ export function StampCamera({
   onCaptured: (photo: StampedPhoto) => void;
   /** GPS could not be used (reported to the screen so it can offer a way out). */
   onGpsProblem?: (p: GpsProblem) => void;
+  /** The camera cannot be used (permission refused, camera error); same purpose. */
+  onCameraProblem?: (message: string) => void;
 }) {
   const insets = useSafeAreaInsets();
   const { width: screenW } = useWindowDimensions();
@@ -133,6 +132,8 @@ export function StampCamera({
     if (!visible) return;
     setNow(new Date());
     const tick = setInterval(() => setNow(new Date()), 1000);
+    // Every opening waits for a fresh fix (the driver may have moved since).
+    setFix(null);
     setGpsProblem(null);
     const stop = watchFix(
       (f) => {
@@ -150,8 +151,25 @@ export function StampCamera({
     };
   }, [visible]);
 
+  // Ask for the camera once per opening (asking again right after a "Tolak" would
+  // let one accidental tap become Android's permanent denial).
+  const asked = useRef(false);
+  const cameraCb = useRef(onCameraProblem);
   useEffect(() => {
-    if (visible && perm && !perm.granted && perm.canAskAgain) void requestPerm();
+    cameraCb.current = onCameraProblem;
+  });
+  useEffect(() => {
+    if (!visible) {
+      asked.current = false;
+      return;
+    }
+    if (!perm || perm.granted) return;
+    if (perm.canAskAgain && !asked.current) {
+      asked.current = true;
+      void requestPerm();
+    } else {
+      cameraCb.current?.('Izin kamera belum diberikan.');
+    }
   }, [visible, perm, requestPerm]);
 
   useEffect(() => {
@@ -171,6 +189,7 @@ export function StampCamera({
       setShot({ uri: pic.uri, width: pic.width || 3, height: pic.height || 4, fix, at: new Date() });
     } catch {
       setError('Kamera gagal mengambil foto. Coba lagi.');
+      cameraCb.current?.('Kamera gagal mengambil foto.');
     }
   };
 
@@ -182,6 +201,16 @@ export function StampCamera({
   const ratio = PixelRatio.get() || 1;
   const viewW = outW / ratio;
   const viewH = outH / ratio;
+
+  const fallback = async () => {
+    if (!shot) return;
+    try {
+      onCaptured({ uri: await shrinkUri(shot.uri, shot.width, shot.height), fix: shot.fix, stamped: false });
+    } catch {
+      setShot(null);
+      setError('Foto tidak bisa diproses. Coba ambil ulang.');
+    }
+  };
 
   const composeLoaded = async () => {
     if (!shot) return;
@@ -195,12 +224,7 @@ export function StampCamera({
       onCaptured({ uri, fix: shot.fix, stamped: true });
       return;
     }
-    try {
-      onCaptured({ uri: await shrinkUri(shot.uri, shot.width, shot.height), fix: shot.fix, stamped: false });
-    } catch {
-      setShot(null);
-      setError('Foto tidak bisa diproses. Coba ambil ulang.');
-    }
+    await fallback();
   };
 
   const granted = !!perm?.granted;
@@ -216,7 +240,8 @@ export function StampCamera({
             <Image
               source={{ uri: shot.uri }}
               style={{ width: viewW, height: viewH }}
-              onLoadEnd={composeLoaded}
+              onLoad={composeLoaded}
+              onError={() => void fallback()}
               resizeMode="cover"
               resizeMethod="resize"
             />

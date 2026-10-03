@@ -50,6 +50,7 @@ export function persistCache(qc: QueryClient): () => void {
 export async function clearCache(qc: QueryClient) {
   qc.clear();
   try {
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    // Also the inbox "read" marks not sent yet (they belong to this driver).
+    await AsyncStorage.multiRemove([STORAGE_KEY, 'arasya.pendingReads.v1']);
   } catch {}
 }

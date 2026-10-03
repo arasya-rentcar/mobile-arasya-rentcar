@@ -342,6 +342,14 @@ async function run(): Promise<void> {
       if (!item) continue; // removed meanwhile (e.g. trip dropped)
       if (item.failed) continue; // waits for the driver; does not block the trip
       if (blockedTrips.has(item.tripId)) continue; // keep per-trip order
+      // The odometer end waits while the start is still on the phone (e.g. failed and waiting
+      // for "Coba lagi"): sent first, the server would refuse it and the photo would be lost.
+      if (
+        item.reportType === 'ODOMETER_END' &&
+        items.some((i) => i.tripId === item.tripId && i.reportType === 'ODOMETER_START')
+      ) {
+        continue;
+      }
       if (item.nextAttemptAt > Date.now()) {
         blockedTrips.add(item.tripId);
         continue;

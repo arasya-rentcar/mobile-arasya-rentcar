@@ -74,8 +74,9 @@ function AppNavigator() {
     if (!isDriver) return;
     const openFromPush = (id: string | null, data: PushData) => {
       void queryClient.invalidateQueries({ queryKey: ['trips'] });
-      void queryClient.invalidateQueries({ queryKey: keys.notifications });
+      // Marking read refreshes the inbox itself (after the server has it).
       if (data.notification_id) void markNotificationsRead({ ids: [data.notification_id] });
+      else void queryClient.invalidateQueries({ queryKey: keys.notifications });
       if (id && data.type !== 'trip_updated') {
         void queryClient.invalidateQueries({ queryKey: keys.trip(id) });
         router.push({ pathname: '/trip/[id]', params: { id } });

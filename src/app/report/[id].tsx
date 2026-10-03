@@ -86,7 +86,7 @@ export default function ReportFormScreen() {
   const submit = async () => {
     if (odoBlocked) return setError(odoBlocked);
     if (isOdo && !photo) return setError('Ambil foto odometer dulu, ya.');
-    if (isOdo && amount == null) return setError('Isi angka odometer (km) sesuai foto.');
+    if (isOdo && (amount == null || amount <= 0)) return setError('Isi angka odometer (km) sesuai foto.');
     if (startKm != null && amount != null && amount < startKm)
       return setError(`Angka akhir lebih kecil dari odometer awal (${formatKm(startKm)}). Cek lagi angkanya.`);
     if (isCost && (!amount || amount <= 0)) return setError('Isi jumlah biaya (Rp) dulu.');

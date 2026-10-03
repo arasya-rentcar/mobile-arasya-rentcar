@@ -8,6 +8,7 @@ import { registerForPush, unregisterPush } from './push';
 import { secureStorage, TOKEN_KEY } from './storage';
 import { disableBackgroundSync, enableBackgroundSync } from './backgroundSync';
 import { showNotice } from './notices';
+import { resetPendingReads } from './trips';
 import type { User } from './types';
 
 const USER_KEY = 'arasya.user';
@@ -60,6 +61,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setAuthToken(null);
     await Promise.all([secureStorage.remove(TOKEN_KEY), secureStorage.remove(USER_KEY)]);
     await clearCache(queryClient);
+    resetPendingReads();
     setState({ status: 'signedOut', user: null });
   }, []);
 

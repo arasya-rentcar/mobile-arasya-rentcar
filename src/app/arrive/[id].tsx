@@ -37,6 +37,7 @@ function ArriveView({ tripId }: { tripId: string }) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [photo, setPhoto] = useState<StampedPhoto | null>(null);
   const [gpsProblem, setGpsProblem] = useState<GpsProblem | null>(null);
+  const [cameraProblem, setCameraProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const opened = useRef(false);
 
@@ -49,6 +50,7 @@ function ArriveView({ tripId }: { tripId: string }) {
 
   const alreadyArrived = trip ? nextAction(trip) !== 'arrive' : false;
   const onGpsProblem = useCallback((p: GpsProblem) => setGpsProblem(p), []);
+  const onCameraProblem = useCallback((m: string) => setCameraProblem(m), []);
 
   const finish = (location: GpsFix | null) => {
     if (router.canGoBack()) router.back();
@@ -139,6 +141,11 @@ function ArriveView({ tripId }: { tripId: string }) {
             {gpsProblem.error}
           </Banner>
         ) : null}
+        {cameraProblem && !photo ? (
+          <Banner tone="warning" icon="camera-outline">
+            {`${cameraProblem} Izinkan kamera di Pengaturan HP, atau tandai sampai tanpa foto.`}
+          </Banner>
+        ) : null}
         {!online ? (
           <Banner tone="warning" icon="cloud-offline">
             Tidak ada sinyal. Foto dan lokasi disimpan dan dikirim otomatis nanti.
@@ -154,10 +161,11 @@ function ArriveView({ tripId }: { tripId: string }) {
           loading={busy}
           disabled={!photo || alreadyArrived}
         />
-        {gpsProblem?.noFix && !photo && !alreadyArrived ? (
+        {(gpsProblem || cameraProblem) && !photo && !alreadyArrived ? (
           <View style={{ gap: 6 }}>
             <Text style={styles.muted}>
-              GPS tetap tidak dapat lokasi? Tandai sampai tanpa foto lokasi. Admin akan melihat bahwa lokasinya kosong.
+              Kamera atau GPS tidak bisa dipakai? Tandai sampai tanpa foto lokasi. Admin akan melihat bahwa foto dan
+              lokasinya kosong.
             </Text>
             <Button title="Tandai sampai tanpa lokasi" variant="ghost" onPress={submitWithoutLocation} />
           </View>
@@ -175,9 +183,11 @@ function ArriveView({ tripId }: { tripId: string }) {
         }}
         onClose={() => setCameraOpen(false)}
         onGpsProblem={onGpsProblem}
+        onCameraProblem={onCameraProblem}
         onCaptured={(p) => {
           setPhoto(p);
           setGpsProblem(null);
+          setCameraProblem(null);
           setCameraOpen(false);
         }}
       />

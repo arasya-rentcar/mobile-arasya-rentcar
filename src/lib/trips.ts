@@ -6,7 +6,9 @@ import { showNotice } from './notices';
 import { dropTripItems, enqueue, sendNow, useQueue, type QueueItem, type TripAction } from './queue';
 import { queryClient } from './queryClient';
 import { applyPending } from './tripState';
-import type { GpsFix, NotificationPage, Trip, TripDetail } from './types';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import type { GpsFix, NotificationPage, Report, Trip, TripDetail } from './types';
 
 export const keys = {
   me: ['me'] as const,
@@ -19,26 +21,81 @@ export function useMe(enabled = true) {
   return useQuery({ queryKey: keys.me, queryFn: api.me, enabled });
 }
 
-/** The inbox (newest 50) and the unread count for the bell badge. */
-export function useNotifications(enabled = true) {
-  return useQuery<NotificationPage>({ queryKey: keys.notifications, queryFn: () => api.notifications(), enabled });
+/** Logout: forget "read" marks not sent yet (they belong to the previous driver). */
+export function resetPendingReads() {
+  pendingReads = null;
 }
 
-/** Marks notifications read on the server; the badge updates right away. */
-export async function markNotificationsRead(input: { ids?: string[]; all?: boolean }) {
-  queryClient.setQueryData<NotificationPage>(keys.notifications, (old) => {
-    if (!old) return old;
-    const hit = (id: string) => input.all || input.ids?.includes(id);
-    const items = old.items.map((n) => (hit(n.id) ? { ...n, read: true } : n));
-    const newlyRead = old.items.filter((n) => !n.read && hit(n.id)).length;
-    return { items, unread: input.all ? 0 : Math.max(0, old.unread - newlyRead) };
-  });
+// "Read" marks the server has not confirmed yet (no signal): kept on the phone, sent before the
+// next inbox fetch, and applied to what that fetch returns so read items do not light up again.
+const PENDING_READS_KEY = 'arasya.pendingReads.v1';
+let pendingReads: { all: boolean; ids: string[] } | null = null;
+
+async function loadPendingReads() {
+  if (pendingReads) return pendingReads;
+  // (clearCache removes the stored copy on logout; the in-memory one is reset there too.)
   try {
-    const r = await api.readNotifications(input);
-    queryClient.setQueryData<NotificationPage>(keys.notifications, (old) => (old ? { ...old, unread: r.unread } : old));
+    const raw = await AsyncStorage.getItem(PENDING_READS_KEY);
+    pendingReads = raw ? JSON.parse(raw) : { all: false, ids: [] };
   } catch {
-    // Offline: shown as read here; the server catches up on the next refresh.
+    pendingReads = { all: false, ids: [] };
   }
+  return pendingReads!;
+}
+
+async function savePendingReads(next: { all: boolean; ids: string[] }) {
+  pendingReads = next;
+  try {
+    await AsyncStorage.setItem(PENDING_READS_KEY, JSON.stringify(next));
+  } catch {}
+}
+
+/** Sends the waiting "read" marks; true when there is nothing left to send. */
+async function flushPendingReads(): Promise<boolean> {
+  const p = await loadPendingReads();
+  if (!p.all && !p.ids.length) return true;
+  try {
+    await api.readNotifications(p.all ? { all: true } : { ids: p.ids.slice(0, 200) });
+    await savePendingReads(p.all ? { all: false, ids: [] } : { all: false, ids: p.ids.slice(200) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function applyPendingReads(page: NotificationPage, p: { all: boolean; ids: string[] }): NotificationPage {
+  if (!p.all && !p.ids.length) return page;
+  const hit = (id: string) => p.all || p.ids.includes(id);
+  const items = page.items.map((n) => (hit(n.id) ? { ...n, read: true } : n));
+  const newlyRead = page.items.filter((n) => !n.read && hit(n.id)).length;
+  return { items, unread: p.all ? 0 : Math.max(0, page.unread - newlyRead) };
+}
+
+/** The inbox (newest 50) and the unread count for the bell badge. */
+export function useNotifications(enabled = true) {
+  return useQuery<NotificationPage>({
+    queryKey: keys.notifications,
+    queryFn: async () => {
+      await flushPendingReads();
+      const page = await api.notifications();
+      return applyPendingReads(page, await loadPendingReads());
+    },
+    enabled,
+  });
+}
+
+/** Marks notifications read: the badge updates right away, the server when there is signal. */
+export async function markNotificationsRead(input: { ids?: string[]; all?: boolean }) {
+  // An inbox fetch already on its way must not put the old unread state back.
+  await queryClient.cancelQueries({ queryKey: keys.notifications });
+  const p = await loadPendingReads();
+  await savePendingReads(
+    input.all ? { all: true, ids: [] } : { all: p.all, ids: [...new Set([...p.ids, ...(input.ids ?? [])])] },
+  );
+  queryClient.setQueryData<NotificationPage>(keys.notifications, (old) =>
+    old ? applyPendingReads(old, { all: !!input.all, ids: input.ids ?? [] }) : old,
+  );
+  if (await flushPendingReads()) void queryClient.invalidateQueries({ queryKey: keys.notifications });
 }
 
 export function useTrips(scope: 'active' | 'history') {
@@ -101,7 +158,11 @@ export const queueHandlers = {
     void queryClient.invalidateQueries({ queryKey: ['trips'] });
     if (item.kind === 'finish') void queryClient.invalidateQueries({ queryKey: keys.trip(item.tripId) });
   },
-  onReportDone(item: QueueItem) {
+  onReportDone(item: QueueItem, report: Report) {
+    // Shown as sent right away (odometer buttons read it), before the refetch lands.
+    queryClient.setQueryData<TripDetail>(keys.trip(item.tripId), (old) =>
+      old ? { ...old, reports: [...old.reports.filter((r) => r.id !== report.id), report] } : old,
+    );
     void queryClient.invalidateQueries({ queryKey: keys.trip(item.tripId) });
     void queryClient.invalidateQueries({ queryKey: ['trips'] });
   },
