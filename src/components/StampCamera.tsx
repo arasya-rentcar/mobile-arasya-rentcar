@@ -18,7 +18,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { colors } from '@/lib/config';
 import { formatDateKey, formatTime, wibDateKey } from '@/lib/format';
-import { formatFix, watchFix } from '@/lib/location';
+import { formatFix, placeName, usePlaceName, watchFix } from '@/lib/location';
 import { shrinkUri } from '@/lib/photos';
 import type { GpsFix } from '@/lib/types';
 import { Button } from './ui';
@@ -27,15 +27,17 @@ import { Button } from './ui';
 const OUT_LONG_SIDE = 1600;
 
 export type StampInfo = {
-  /** First line, e.g. "SAMPAI DI LOKASI JEMPUT". */
+  /** First line, e.g. "SAMPAI DI LOKASI JEMPUT" or "CHECKPOINT 2". */
   title: string;
   orderCode: string | null;
   driverName: string;
-  place: string;
+  /** Optional last line, e.g. "Jemput: <pickup address>". */
+  detail?: string;
 };
 
 export type StampedPhoto = {
   uri: string;
+  /** The GPS fix of the shot, with the place name printed on it (`name`, when one was found). */
   fix: GpsFix;
   /** The stamp is burned into the picture on the phone (else the server adds it). */
   stamped: boolean;
@@ -53,10 +55,23 @@ function wibParts(d: Date) {
 
 /**
  * The stamp drawn over the photo, like the "time mark" camera apps: big time, date, what and
- * who, GPS and place. Sized from the width of the picture it sits on, so the live preview and
- * the saved photo look the same.
+ * who, place name (when the phone found one) above the GPS coordinates. Sized from the width of
+ * the picture it sits on, so the live preview and the saved photo look the same.
  */
-export function StampOverlay({ info, fix, at, width }: { info: StampInfo; fix: GpsFix | null; at: Date; width: number }) {
+export function StampOverlay({
+  info,
+  fix,
+  name,
+  at,
+  width,
+}: {
+  info: StampInfo;
+  fix: GpsFix | null;
+  /** Place name for the fix; the coordinates are always printed too. */
+  name?: string | null;
+  at: Date;
+  width: number;
+}) {
   const u = width / 100; // 1% of the picture width
   const { time, date } = wibParts(at);
   const gps = fix
@@ -76,10 +91,19 @@ export function StampOverlay({ info, fix, at, width }: { info: StampInfo; fix: G
         {`${info.title}${info.orderCode ? ` · ${info.orderCode}` : ''}`}
       </Text>
       <Text style={[styles.line, { fontSize: u * 3.6 }]} numberOfLines={1}>{`Driver: ${info.driverName}`}</Text>
-      <Text style={[styles.line, { fontSize: u * 3.6 }, !fix && { color: '#ffd27a' }]} numberOfLines={1}>
+      {fix && name ? (
+        <Text testID="stamp-place" style={[styles.line, styles.placeName, { fontSize: u * 3.6 }]} numberOfLines={2}>
+          {name}
+        </Text>
+      ) : null}
+      <Text style={[styles.line, { fontSize: u * 3.4 }, !fix && { color: '#ffd27a' }]} numberOfLines={1}>
         {gps}
       </Text>
-      <Text style={[styles.line, { fontSize: u * 3.4 }]} numberOfLines={2}>{`Jemput: ${info.place}`}</Text>
+      {info.detail ? (
+        <Text style={[styles.line, { fontSize: u * 3.4 }]} numberOfLines={2}>
+          {info.detail}
+        </Text>
+      ) : null}
       <Text style={[styles.brand, { fontSize: u * 3 }]}>Arasya Rent Car</Text>
     </View>
   );
@@ -88,9 +112,10 @@ export function StampOverlay({ info, fix, at, width }: { info: StampInfo; fix: G
 type Shot = { uri: string; width: number; height: number; fix: GpsFix; at: Date };
 
 /**
- * Full-screen camera with a live stamp (time, driver, GPS, place). The shutter waits for a GPS
- * fix. After the shot the photo is drawn with the same stamp and saved as one JPEG on the phone,
- * so the stamp is part of the picture even before it is uploaded. If that fails the plain photo
+ * Full-screen camera with a live stamp (time, driver, place name, GPS). The shutter waits for a
+ * GPS fix; the place name is looked up on the phone and left out when it cannot be found. After
+ * the shot the photo is drawn with the same stamp and saved as one JPEG on the phone, so the
+ * stamp is part of the picture even before it is uploaded. If that fails the plain photo
  * is returned (resized) and the server burns the stamp in instead.
  */
 export function StampCamera({
@@ -120,7 +145,9 @@ export function StampCamera({
   const [now, setNow] = useState(() => new Date());
   const [ready, setReady] = useState(false);
   const [shot, setShot] = useState<Shot | null>(null);
+  const [taking, setTaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const liveName = usePlaceName(visible ? fix : null);
 
   // Live clock + GPS while the camera is open. The callback is read through a ref so a new
   // function from the parent does not restart the GPS watch.
@@ -172,24 +199,38 @@ export function StampCamera({
     }
   }, [visible, perm, requestPerm]);
 
+  // Counts openings, so a shot still waiting for its place name is dropped after a close.
+  const opening = useRef(0);
   useEffect(() => {
+    opening.current += 1;
     if (!visible) {
       setShot(null);
+      setTaking(false);
       setReady(false);
       setError(null);
     }
   }, [visible]);
 
   const take = async () => {
-    if (!cam.current || !fix || shot) return;
+    if (!cam.current || !fix || shot || taking) return;
     setError(null);
+    setTaking(true);
+    const mine = opening.current;
     try {
       const pic = await cam.current.takePictureAsync({ quality: 0.85 });
       if (!pic?.uri) throw new Error('no picture');
-      setShot({ uri: pic.uri, width: pic.width || 3, height: pic.height || 4, fix, at: new Date() });
+      const at = new Date();
+      // The name is printed on the photo: when the live view has none yet, wait for it briefly
+      // (cached, or the lookup's own ~3 s limit; nothing when offline).
+      const name = liveName ?? (await placeName(fix));
+      if (mine !== opening.current) return; // the camera was closed meanwhile
+      setShot({ uri: pic.uri, width: pic.width || 3, height: pic.height || 4, fix: { ...fix, name }, at });
     } catch {
+      if (mine !== opening.current) return;
       setError('Kamera gagal mengambil foto. Coba lagi.');
       cameraCb.current?.('Kamera gagal mengambil foto.');
+    } finally {
+      if (mine === opening.current) setTaking(false);
     }
   };
 
@@ -245,7 +286,7 @@ export function StampCamera({
               resizeMode="cover"
               resizeMethod="resize"
             />
-            <StampOverlay info={info} fix={shot.fix} at={shot.at} width={viewW} />
+            <StampOverlay info={info} fix={shot.fix} name={shot.fix.name} at={shot.at} width={viewW} />
           </View>
         ) : null}
 
@@ -253,13 +294,13 @@ export function StampCamera({
           <View style={StyleSheet.absoluteFill}>
             <CameraView ref={cam} style={StyleSheet.absoluteFill} facing="back" onCameraReady={() => setReady(true)} />
             <View style={styles.liveStampWrap}>
-              <StampOverlay info={info} fix={fix} at={now} width={screenW} />
+              <StampOverlay info={info} fix={fix} name={liveName} at={now} width={screenW} />
             </View>
           </View>
         ) : (
           <View style={[styles.center, { padding: 24, gap: 14 }]}>
             <Ionicons name="camera-outline" size={56} color={colors.white} />
-            <Text style={styles.permText}>Izinkan kamera untuk mengambil foto di lokasi jemput.</Text>
+            <Text style={styles.permText}>Izinkan kamera untuk mengambil foto dengan cap waktu dan lokasi.</Text>
             {perm && !perm.canAskAgain ? (
               <Button title="Buka Pengaturan" icon="settings-outline" onPress={() => Linking.openSettings().catch(() => {})} />
             ) : (
@@ -301,7 +342,7 @@ export function StampCamera({
             <Pressable
               testID="stamp-shutter"
               onPress={take}
-              disabled={!fix || !ready || !!shot}
+              disabled={!fix || !ready || !!shot || taking}
               accessibilityRole="button"
               accessibilityLabel={fix ? 'Ambil foto' : 'Menunggu GPS'}
               style={({ pressed }) => [styles.shutter, (!fix || !ready) && { opacity: 0.4 }, pressed && { transform: [{ scale: 0.94 }] }]}>
@@ -311,7 +352,7 @@ export function StampCamera({
           </View>
         ) : null}
 
-        {shot ? (
+        {shot || taking ? (
           <View style={[StyleSheet.absoluteFill, styles.center, styles.cover]}>
             <ActivityIndicator color={colors.white} size="large" />
             <Text style={styles.permText}>Memberi cap waktu & lokasi…</Text>
@@ -335,6 +376,7 @@ const styles = StyleSheet.create({
   date: { color: colors.white, fontWeight: '800' },
   line: { color: colors.white, fontWeight: '600' },
   lineStrong: { color: '#f6c343', fontWeight: '900' },
+  placeName: { fontWeight: '800' },
   brand: { color: 'rgba(255,255,255,0.75)', fontWeight: '800', alignSelf: 'flex-end' },
   topBar: {
     position: 'absolute',

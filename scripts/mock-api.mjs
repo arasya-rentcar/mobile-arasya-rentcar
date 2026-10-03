@@ -15,11 +15,17 @@ const WIB = 7 * 3600 * 1000;
 const wibDay = (offset) => new Date(Date.now() + WIB + offset * 86400000).toISOString().slice(0, 10);
 const at = (offset, hhmm) => new Date(`${wibDay(offset)}T${hhmm}:00+07:00`).toISOString();
 
-const driver = { id: 'drv-1', name: 'Budi Santoso', phone: '0812345678', status: 'ON_DUTY', type: 'INTERNAL' };
+// etoll_card: what the office recorded (admin driver form); shown on the profile's top-up request.
+const driver = {
+  id: 'drv-1', name: 'Budi Santoso', phone: '0812345678', status: 'ON_DUTY', type: 'INTERNAL',
+  etoll_card: 'Mandiri e-Money 6032 ••••1234',
+};
 
+// Trips are stored like the API's service-day lines: `driver_accepted_at` is set only by "Terima tugas"
+// (or the first step); ASSIGNED just means the day has a driver. Sent to the app as `accepted_at`.
 function trip(t) {
   return {
-    order_code: null, status: 'ASSIGNED', accepted_at: null, service_kind: null, service_package: null,
+    order_code: null, status: 'ASSIGNED', driver_accepted_at: null, service_kind: null, service_package: null,
     notes: null, order_notes: null, passenger_count: null, other_customers: [], car: null,
     actual_start_at: null, actual_pickup_at: null, customer_onboard_at: null, trip_finished_at: null,
     payment_ready: true, ...t,
@@ -28,7 +34,8 @@ function trip(t) {
 
 const trips = [
   trip({
-    id: 'line-new-bandara', order_id: 'ord-101', order_code: 'ARS-2410-101', status: 'SCHEDULED',
+    // Assigned by the office but not accepted yet: the app shows "Terima tugas".
+    id: 'line-new-bandara', order_id: 'ord-101', order_code: 'ARS-2410-101', status: 'ASSIGNED',
     service_date: wibDay(1), start_at: at(1, '04:30'), end_at: at(1, '09:00'),
     pickup_location: 'Perumahan Bogor Nirwana Residence, Jl. Bukit Nirwana Blok C3 No. 8, Bogor',
     dropoff_location: 'Bandara Soekarno-Hatta Terminal 3 (Keberangkatan Internasional)',
@@ -39,7 +46,7 @@ const trips = [
   }),
   trip({
     id: 'line-jkt-bdg', order_id: 'ord-099', order_code: 'ARS-2410-099', status: 'ASSIGNED',
-    accepted_at: at(-1, '19:12'),
+    driver_accepted_at: at(-1, '19:12'),
     service_date: wibDay(0), start_at: at(0, '08:00'), end_at: at(0, '20:00'),
     pickup_location: 'Hotel Indonesia Kempinski, Jl. M.H. Thamrin No. 1, Jakarta Pusat',
     dropoff_location: 'Gedung Sate, Jl. Diponegoro No. 22, Bandung',
@@ -51,7 +58,7 @@ const trips = [
   }),
   trip({
     id: 'line-3hari-jogja', order_id: 'ord-095', order_code: 'ARS-2409-095', status: 'ASSIGNED',
-    accepted_at: at(-2, '10:00'),
+    driver_accepted_at: at(-2, '10:00'),
     service_date: wibDay(2), start_at: at(2, '06:00'), end_at: at(4, '18:00'),
     pickup_location: 'Jl. Kemang Raya No. 45, Jakarta Selatan',
     dropoff_location: 'Malioboro, Yogyakarta (keliling Jogja 3 hari)',
@@ -64,7 +71,7 @@ const trips = [
   }),
   trip({
     id: 'line-done-cibubur', order_id: 'ord-090', order_code: 'ARS-2409-090', status: 'DONE',
-    accepted_at: at(-1, '05:00'), actual_start_at: at(-1, '06:05'), actual_pickup_at: at(-1, '06:50'),
+    driver_accepted_at: at(-1, '05:00'), actual_start_at: at(-1, '06:05'), actual_pickup_at: at(-1, '06:50'),
     customer_onboard_at: at(-1, '07:00'),
     trip_finished_at: at(-1, '17:40'),
     service_date: wibDay(-1), start_at: at(-1, '07:00'), end_at: at(-1, '17:00'),
@@ -121,14 +128,36 @@ const notifications = [
     body: 'Besok 04.30 · Bogor Nirwana Residence → Bandara Soekarno-Hatta', data: { type: 'trip_assigned', line_id: 'line-new-bandara' },
   },
 ];
+// Location fields of arrive and of reports (arrival and checkpoint photos). `location_name` is the
+// place name the phone looked up (stored and returned with the coordinates).
 const location = (f) =>
   f.latitude != null && f.latitude !== '' && f.longitude != null && f.longitude !== ''
     ? {
         latitude: Number(f.latitude),
         longitude: Number(f.longitude),
         location_accuracy_m: f.location_accuracy_m != null && f.location_accuracy_m !== '' ? Math.round(Number(f.location_accuracy_m)) : null,
+        location_at: f.location_at || null,
+        location_mocked: f.location_mocked === true || f.location_mocked === 'true' ? true : f.location_mocked != null ? false : null,
+        location_name: typeof f.location_name === 'string' && f.location_name.trim() ? f.location_name.trim() : null,
       }
     : {};
+/** Same checks as the API's location fields: both coordinates or none, name at most 200 characters. */
+function locationError(f) {
+  const lat = f.latitude != null && f.latitude !== '';
+  const lng = f.longitude != null && f.longitude !== '';
+  if (lat !== lng) return 'latitude and longitude go together';
+  if (lat && (!Number.isFinite(Number(f.latitude)) || Math.abs(Number(f.latitude)) > 90)) return 'latitude tidak valid';
+  if (lng && (!Number.isFinite(Number(f.longitude)) || Math.abs(Number(f.longitude)) > 180)) return 'longitude tidak valid';
+  if (f.location_name != null && String(f.location_name).length > 200) return 'location_name maksimal 200 karakter';
+  return null;
+}
+
+// Driver requests (POST /driver/requests): e-toll top-up. One OPEN request per type; client_ref makes
+// a resend return the same request.
+const requests = [];
+const requestRefs = new Map(); // client_ref -> request
+const REQUEST_TYPES = ['ETOLL_TOPUP'];
+const publicRequest = ({ driver_id, client_ref, ...r }) => r;
 const files = new Map(); // name -> Buffer
 const devices = new Set();
 
@@ -186,9 +215,14 @@ function parseMultipart(buf, contentType) {
   return { fields, files: fileParts };
 }
 
-const isAccepted = (t) => !!t.accepted_at || ['ASSIGNED', 'IN_PROGRESS', 'DONE'].includes(t.status);
+const isAccepted = (t) => !!t.driver_accepted_at;
 const sortKey = (t) => t.start_at || t.service_date || '';
-const withCount = (t) => ({ ...t, report_count: (reports[t.id] || []).filter((r) => !r.is_system).length });
+// Like the API's toTrip: the line's driver_accepted_at goes out as `accepted_at`.
+const withCount = ({ driver_accepted_at, ...t }) => ({
+  ...t,
+  accepted_at: driver_accepted_at,
+  report_count: (reports[t.id] || []).filter((r) => !r.is_system).length,
+});
 const expensesOf = (id) =>
   (reports[id] || [])
     .filter((r) => r.amount != null && ['FUEL', 'TOLL', 'PARKING', 'OTHER_COST'].includes(r.report_type))
@@ -255,6 +289,55 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && p === '/driver/me') return ok(res, driver);
 
+    if (req.method === 'GET' && p === '/driver/requests') {
+      const status = url.searchParams.get('status') || 'open';
+      if (!['open', 'all'].includes(status)) return fail(res, 400, 'status harus open atau all');
+      const list = requests
+        .filter((r) => status === 'all' || r.status === 'OPEN')
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .slice(0, 20);
+      return ok(res, { items: list.map(publicRequest) });
+    }
+    if (req.method === 'POST' && p === '/driver/requests') {
+      const body = JSON.parse((await readBody(req)).toString() || '{}');
+      if (!REQUEST_TYPES.includes(body.type)) return fail(res, 400, 'type tidak valid');
+      if (!body.client_ref || !UUID_RE.test(body.client_ref)) return fail(res, 400, 'client_ref harus UUID');
+      if (body.occurred_at && Number.isNaN(Date.parse(body.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
+      if (body.card_label != null && String(body.card_label).length > 60) return fail(res, 400, 'card_label maksimal 60 karakter');
+      if (body.note != null && String(body.note).length > 500) return fail(res, 400, 'note terlalu panjang');
+      if (body.balance != null && !(Number(body.balance) >= 0)) return fail(res, 400, 'balance tidak valid');
+      const again = requestRefs.get(body.client_ref);
+      if (again) return ok(res, { request: publicRequest(again) });
+      const open = requests.find((r) => r.type === body.type && r.status === 'OPEN');
+      if (open) return ok(res, { request: publicRequest(open), already_open: true });
+      const r = {
+        id: randomUUID(), driver_id: driver.id, type: body.type,
+        card_label: body.card_label?.trim() || driver.etoll_card || null,
+        balance: body.balance != null ? String(body.balance) : null, // Decimal on the API
+        note: body.note?.trim() || null, status: 'OPEN', client_ref: body.client_ref,
+        created_at: body.occurred_at || now, handled_at: null, handled_by: null, handled_note: null,
+      };
+      requests.push(r);
+      requestRefs.set(r.client_ref, r);
+      console.log(`  admin notification: ${driver.name} minta top-up e-toll · Kartu ${r.card_label ?? '-'}`);
+      return ok(res, { request: publicRequest(r) }, 201);
+    }
+    // Test helper: the admin marks the request done → push + inbox "Top-up e-toll sudah diproses".
+    const handled = /^\/driver\/__mock\/requests\/([^/]+)\/done$/.exec(p);
+    if (req.method === 'POST' && handled) {
+      const body = JSON.parse((await readBody(req)).toString() || '{}');
+      const r = requests.find((x) => x.id === handled[1]);
+      if (!r) return fail(res, 404, 'Permintaan tidak ditemukan');
+      if (r.status !== 'OPEN') return fail(res, 409, 'Permintaan sudah diproses');
+      Object.assign(r, { status: 'DONE', handled_at: now, handled_by: 'usr-admin-1', handled_note: body.note?.trim() || null });
+      notifications.push({
+        id: randomUUID(), type: 'driver_request_done', title: 'Top-up e-toll sudah diproses', read: false, created_at: now,
+        body: [r.card_label ? `Kartu ${r.card_label}` : null, r.handled_note].filter(Boolean).join(' · ') || 'Saldo e-toll sudah diisi.',
+        data: { type: 'driver_request_done', driver_request_id: r.id },
+      });
+      return ok(res, { request: publicRequest(r) });
+    }
+
     if (req.method === 'GET' && p === '/driver/notifications') {
       const list = [...notifications].sort((a, b) => b.created_at.localeCompare(a.created_at));
       return ok(res, { unread: list.filter((n) => !n.read).length, items: list });
@@ -311,6 +394,8 @@ const server = http.createServer(async (req, res) => {
       if (fields.client_ref && !UUID_RE.test(fields.client_ref)) return fail(res, 400, 'client_ref harus UUID');
       if (fields.occurred_at && Number.isNaN(Date.parse(fields.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
       if ((fileParts.photo?.data?.length || 0) > MAX_PHOTO_BYTES) return fail(res, 413, 'Ukuran foto maksimal 10 MB');
+      const locErr = locationError(fields);
+      if (locErr) return fail(res, 400, locErr);
       if (fields.client_ref && clientRefs.has(fields.client_ref)) return ok(res, clientRefs.get(fields.client_ref));
       const hasPhoto = !!fileParts.photo?.data?.length;
       // Same rules as the real API: odometer start once, then end once and not lower.
@@ -337,7 +422,9 @@ const server = http.createServer(async (req, res) => {
       const amount = fields.amount ? parseInt(fields.amount, 10) : null;
       if (amount != null && (!Number.isInteger(amount) || amount < 0)) return fail(res, 400, 'amount tidak valid');
       // ODOMETER_* carry the odometer reading (km) in `amount`; cost types carry rupiah. Optional.
+      // `stamped`: the phone's GPS camera already printed time/driver/GPS on the photo (not returned).
       const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now, is_system: false, ...location(fields) };
+      if (fields.stamped === 'true') console.log(`  ${fields.report_type} stamped on the phone${fields.location_name ? ` · ${fields.location_name}` : ''}`);
       (reports[t.id] ||= []).push(report);
       if (fields.client_ref) clientRefs.set(fields.client_ref, report);
       return ok(res, report);
@@ -346,21 +433,24 @@ const server = http.createServer(async (req, res) => {
     const body = JSON.parse((await readBody(req)).toString() || '{}');
     if (body.occurred_at && Number.isNaN(Date.parse(body.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
     if (body.client_ref && !UUID_RE.test(body.client_ref)) return fail(res, 400, 'client_ref harus UUID');
+    const actionLocErr = locationError(body);
+    if (actionLocErr) return fail(res, 400, actionLocErr);
     // Same as the real API: the phone's time of the tap (queued offline) wins.
     const at = body.occurred_at || now;
     if (action === 'accept') {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
-      t.accepted_at ||= at;
+      t.driver_accepted_at ||= at;
     } else if (action === 'start') {
       if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
       if (t.status !== 'IN_PROGRESS') {
-        t.accepted_at ||= at;
+        t.driver_accepted_at ||= at;
         t.status = 'IN_PROGRESS';
         t.actual_start_at ||= at;
         addSystemRow(t.id, 'START', at);
       }
     } else if (action === 'arrive') {
       if (['DONE', 'CANCELLED'].includes(t.status)) return fail(res, 409, 'Tugas sudah selesai/dibatalkan');
+      t.driver_accepted_at ||= at;
       t.actual_pickup_at ||= at;
       addSystemRow(t.id, 'ARRIVE_CUSTOMER', at);
       Object.assign(reports[t.id].find((r) => r.report_type === 'ARRIVE_CUSTOMER'), location(body));
@@ -370,6 +460,7 @@ const server = http.createServer(async (req, res) => {
       if (!t.customer_onboard_at && t.payment_ready === false && !clientRefs.has(body.client_ref))
         return fail(res, 409, UNPAID);
       if (!t.customer_onboard_at) {
+        t.driver_accepted_at ||= at;
         t.customer_onboard_at = at;
         t.actual_start_at ||= at;
         t.status = 'IN_PROGRESS';
@@ -380,7 +471,7 @@ const server = http.createServer(async (req, res) => {
       if (t.status === 'CANCELLED') return fail(res, 409, 'Tugas sudah dibatalkan');
       if (t.status !== 'DONE' && !t.customer_onboard_at && t.payment_ready === false) return fail(res, 409, UNPAID);
       if (t.status !== 'DONE') {
-        t.accepted_at ||= at;
+        t.driver_accepted_at ||= at;
         t.status = 'DONE';
         t.trip_finished_at = at;
         addSystemRow(t.id, 'FINISH', at);
@@ -396,5 +487,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Mock Arasya API on http://localhost:${PORT}${BASE}`);
-  console.log(`Driver login: 0812345678 / test1234 (accepted: ${trips.filter(isAccepted).length} trips)`);
+  console.log(`Driver login: 0812345678 / test1234 (accepted: ${trips.filter(isAccepted).length} of ${trips.length} trips)`);
+  console.log('Helpers: POST /api/v1/driver/__mock/pay/<line id> · POST /api/v1/driver/__mock/requests/<request id>/done');
 });

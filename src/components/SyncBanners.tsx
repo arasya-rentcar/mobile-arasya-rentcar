@@ -14,12 +14,14 @@ export function SyncBanners({ tripId }: { tripId?: string }) {
   const failed = all.filter((q) => q.failed);
   const items = all.filter((q) => !q.failed);
   const reports = items.filter((q) => q.kind === 'report').length;
-  const actions = items.length - reports;
+  const requests = items.filter((q) => q.kind === 'request').length;
+  const actions = items.length - reports - requests;
   if (online && !all.length) return null;
 
   const parts: string[] = [];
   if (reports) parts.push(`${reports} laporan`);
   if (actions) parts.push(`${actions} perubahan status`);
+  if (requests) parts.push(`${requests} permintaan`);
   return (
     <View style={styles.wrap}>
       {!online ? (

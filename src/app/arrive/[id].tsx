@@ -4,10 +4,10 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { PlaceLine } from '@/components/PlaceLine';
 import { StampCamera, type GpsProblem, type StampedPhoto } from '@/components/StampCamera';
 import { Banner, Button, Card } from '@/components/ui';
 import { colors, font } from '@/lib/config';
-import { formatFix } from '@/lib/location';
 import { useOnline } from '@/lib/network';
 import { showNotice } from '@/lib/notices';
 import { keepPhoto } from '@/lib/photos';
@@ -106,12 +106,13 @@ function ArriveView({ tripId }: { tripId: string }) {
           {photo ? (
             <>
               <Image source={{ uri: photo.uri }} style={styles.preview} resizeMode="contain" accessibilityLabel="Foto lokasi dengan cap waktu dan GPS" />
-              <View style={styles.fixRow}>
-                <Ionicons name="location" size={20} color={photo.fix.mocked ? colors.danger : colors.success} />
-                <Text style={styles.fixText}>
-                  {`${formatFix(photo.fix)}${photo.fix.accuracy != null ? ` · akurasi ${photo.fix.accuracy} m` : ''}`}
-                </Text>
-              </View>
+              <PlaceLine
+                name={photo.fix.name}
+                latitude={photo.fix.latitude}
+                longitude={photo.fix.longitude}
+                accuracy={photo.fix.accuracy}
+                mocked={photo.fix.mocked}
+              />
               {photo.fix.mocked ? (
                 <Banner tone="error" icon="warning">
                   HP memakai lokasi palsu (aplikasi mock location). Foto ini akan ditandai untuk dicek admin.
@@ -179,7 +180,7 @@ function ArriveView({ tripId }: { tripId: string }) {
           title: 'SAMPAI DI LOKASI JEMPUT',
           orderCode: trip?.order_code ?? null,
           driverName: me.data?.name ?? 'Driver',
-          place: trip?.pickup_location ?? '-',
+          detail: `Jemput: ${trip?.pickup_location ?? '-'}`,
         }}
         onClose={() => setCameraOpen(false)}
         onGpsProblem={onGpsProblem}
@@ -199,8 +200,6 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 12, maxWidth: 640, width: '100%', alignSelf: 'center' },
   title: { fontSize: font.large, fontWeight: '900', color: colors.navy },
   muted: { fontSize: font.small, color: colors.textMuted },
-  fixRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  fixText: { fontSize: font.small, color: colors.text, fontWeight: '700', flexShrink: 1 },
   photoBox: {
     minHeight: 200,
     borderRadius: 18,

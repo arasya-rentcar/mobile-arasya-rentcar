@@ -1,6 +1,6 @@
 # Arasya Driver
 
-Aplikasi Android untuk driver **Arasya Rent Car**, pengganti bot WhatsApp. Driver menerima tugas lewat notifikasi, melihat detail perjalanan, menekan **Terima tugas → Berangkat → Sampai di lokasi jemput → Selesai**, dan mengirim laporan (foto odometer, struk bensin/tol/parkir/biaya lain, foto & catatan).
+Aplikasi Android untuk driver **Arasya Rent Car**, pengganti bot WhatsApp. Driver menerima tugas lewat notifikasi, melihat detail perjalanan, menekan **Terima tugas → Berangkat → Sampai di lokasi jemput → Selesai**, dan mengirim laporan (foto odometer, struk bensin/tol/parkir/biaya lain, foto checkpoint & catatan). Foto di lokasi jemput dan foto checkpoint ("Checkpoint 1, 2, …") diambil dengan kamera GPS: jam, nama driver, nama lokasi, dan titik GPS tercetak di foto. Di halaman Profil driver bisa **Minta top-up e-toll**.
 
 Semua yang dikirim driver masuk **antrean offline** dulu: kalau sinyal hilang, data disimpan di HP dan dikirim otomatis (berurutan, dengan jeda percobaan ulang) saat sinyal kembali. Laporan memakai `client_ref` (UUID), jadi pengiriman ulang tidak pernah membuat laporan ganda.
 
@@ -26,7 +26,9 @@ npm run mock-api                                               # http://localhos
 EXPO_PUBLIC_API_URL=http://localhost:4010/api/v1 npx expo start --web
 ```
 
-Login driver: `0812345678` / `test1234`. Login admin (untuk melihat layar "khusus driver"): `admin@arasya.id` / `admin123`. Data contoh: tugas baru besok (Bogor → Bandara Soekarno-Hatta), tugas hari ini yang sudah diterima (Jakarta → Bandung, Innova Reborn B 1234 ABC), tugas 3 hari ke Yogyakarta, dan satu tugas selesai di Riwayat.
+Login driver: `0812345678` / `test1234`. Login admin (untuk melihat layar "khusus driver"): `admin@arasya.id` / `admin123`. Data contoh: tugas baru besok yang belum diterima (Bogor → Bandara Soekarno-Hatta), tugas hari ini yang sudah diterima (Jakarta → Bandung, Innova Reborn B 1234 ABC), tugas 3 hari ke Yogyakarta, dan satu tugas selesai di Riwayat.
+
+Bantuan uji di mock: `POST /api/v1/driver/__mock/pay/<id tugas>` (admin mencatat pelunasan) dan `POST /api/v1/driver/__mock/requests/<id permintaan>/done` (admin memproses top-up e-toll; driver dapat notifikasi).
 
 Pemeriksaan: `npx tsc --noEmit` dan `npx expo export --platform android`.
 

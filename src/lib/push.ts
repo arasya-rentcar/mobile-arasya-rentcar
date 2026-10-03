@@ -10,7 +10,15 @@ const PUSH_TOKEN_KEY = 'arasya.pushToken';
 export const TRIPS_CHANNEL = 'trips';
 
 export type PushData = {
-  type?: 'trip_assigned' | 'trip_reminder' | 'trip_updated' | 'order_paid' | 'payable_paid' | 'expense_rejected';
+  type?:
+    | 'trip_assigned'
+    | 'trip_reminder'
+    | 'trip_updated'
+    | 'order_paid'
+    | 'payable_paid'
+    | 'expense_rejected'
+    // A driver request was handled (e.g. the e-toll top-up); the exact name comes from the server.
+    | (string & {});
   line_id?: string;
   /** The inbox row this push was stored as (marked read when the push is opened). */
   notification_id?: string;

@@ -3,12 +3,12 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { colors } from '@/lib/config';
 import { formatTime } from '@/lib/format';
-import { isAccepted } from '@/lib/tripState';
+import { acceptedAt, isAccepted } from '@/lib/tripState';
 import type { Trip } from '@/lib/types';
 
 export function Stepper({ trip }: { trip: Trip }) {
   const steps = [
-    { label: 'Diterima', done: isAccepted(trip), at: trip.accepted_at },
+    { label: 'Diterima', done: isAccepted(trip), at: acceptedAt(trip) },
     { label: 'Berangkat', done: !!trip.actual_start_at || trip.status === 'IN_PROGRESS', at: trip.actual_start_at },
     { label: 'Sampai jemput', done: !!trip.actual_pickup_at, at: trip.actual_pickup_at },
     // Older servers have no "Mulai perjalanan" step (field not sent).

@@ -12,6 +12,7 @@ import { dayLabel, formatDateKey, todayKey, tripDateKey } from '@/lib/format';
 import { retryNow, useQueue } from '@/lib/queue';
 import { useSession } from '@/lib/session';
 import { useMe, useNotifications, useTrips } from '@/lib/trips';
+import { waitingForAcceptance } from '@/lib/tripState';
 import type { Trip } from '@/lib/types';
 
 type Scope = 'active' | 'history';
@@ -57,7 +58,8 @@ function TripsHome() {
   );
 
   const sections = useMemo(() => groupTrips(current.trips), [current.trips]);
-  const newCount = active.trips.filter((t) => !t.accepted_at && t.status === 'SCHEDULED').length;
+  // Trips waiting for "Terima tugas" (ASSIGNED is not an acceptance).
+  const newCount = active.trips.filter(waitingForAcceptance).length;
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = async () => {
     setRefreshing(true);

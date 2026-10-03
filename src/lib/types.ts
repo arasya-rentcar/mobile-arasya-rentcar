@@ -8,6 +8,8 @@ export type DriverProfile = {
   phone: string | null;
   status: 'AVAILABLE' | 'ON_DUTY' | 'OFF';
   type: string | null;
+  /** The driver's e-toll card as the office recorded it, e.g. "Mandiri 6032 ••••1234". Older servers do not send it. */
+  etoll_card?: string | null;
 };
 
 export type TripStatus = 'SCHEDULED' | 'ASSIGNED' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED';
@@ -19,7 +21,13 @@ export type Trip = {
   order_id: string;
   order_code: string | null;
   status: TripStatus;
+  /**
+   * When the driver pressed "Terima tugas" (the server's `driver_accepted_at`). ASSIGNED only
+   * means the office gave the day a driver; it is not an acceptance.
+   */
   accepted_at: string | null;
+  /** Same value under the column's own name, in case a server sends it that way. */
+  driver_accepted_at?: string | null;
   service_date: string | null;
   start_at: string | null;
   end_at: string | null;
@@ -70,6 +78,8 @@ export type GpsFix = {
   at: string;
   /** Android reported the fix came from a mock-location app. */
   mocked?: boolean;
+  /** Short place name from the phone's reverse geocoder (null/absent when unknown or offline). */
+  name?: string | null;
 };
 
 export type Report = {
@@ -84,6 +94,8 @@ export type Report = {
   latitude?: number | null;
   longitude?: number | null;
   location_accuracy_m?: number | null;
+  /** Place name the phone looked up for the coordinates (shown above them). */
+  location_name?: string | null;
 };
 
 export type Expense = {
@@ -120,3 +132,22 @@ export type AppNotification = {
 };
 
 export type NotificationPage = { unread: number; items: AppNotification[] };
+
+export type DriverRequestType = 'ETOLL_TOPUP';
+
+/** Something the driver asks the office for (now: an e-toll top-up). */
+export type DriverRequest = {
+  id: string;
+  type: DriverRequestType | string;
+  card_label: string | null;
+  /** Remaining balance in rupiah the driver typed (Decimal on the server, may come as a string). */
+  balance: number | string | null;
+  note: string | null;
+  status: 'OPEN' | 'DONE' | 'CANCELLED';
+  created_at: string;
+  handled_at: string | null;
+  handled_note: string | null;
+};
+
+/** `POST /driver/requests`: the request, and whether an open one of the same type already existed. */
+export type DriverRequestResult = { request: DriverRequest; already_open?: boolean };

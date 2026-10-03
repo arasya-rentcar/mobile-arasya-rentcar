@@ -1,8 +1,9 @@
 /**
- * Offline queue for everything a driver sends: trip actions (accept / start / arrive / finish)
- * and reports. Items are persisted in AsyncStorage, sent in the order they were made, and retried
- * with backoff while there is no signal. Reports carry a `client_ref` (the item id) so a resend
- * after a lost response never creates a duplicate on the server.
+ * Offline queue for everything a driver sends: trip actions (accept / start / arrive / finish),
+ * reports, and requests to the office (e-toll top-up). Items are persisted in AsyncStorage, sent
+ * in the order they were made, and retried with backoff while there is no signal. Every item
+ * carries a `client_ref` (the item id) so a resend after a lost response never creates a
+ * duplicate on the server.
  *
  * Safety rules that keep one bad item from hurting the rest:
  * - An item that keeps failing with a server error (5xx / 408 / 429) is retried at most
@@ -22,15 +23,27 @@ import * as Crypto from 'expo-crypto';
 import { api, ApiError, CLIENT_ERROR } from './api';
 import { getOnline } from './network';
 import { appendPhoto, deletePhoto } from './photos';
-import type { GpsFix, Report, ReportType, Trip } from './types';
+import type { DriverRequestResult, DriverRequestType, GpsFix, Report, ReportType, Trip } from './types';
 
 export type TripAction = 'accept' | 'start' | 'arrive' | 'board' | 'finish';
+
+/** `tripId` of driver requests: they belong to no trip, but keep their own order like a trip. */
+export const REQUESTS_QUEUE_ID = 'driver-requests';
+
+export type DriverRequestInput = {
+  type: DriverRequestType;
+  card_label?: string;
+  /** Rupiah. */
+  balance?: number | null;
+  note?: string;
+};
 
 export type QueueItem = {
   /** Unique id; doubles as the report `client_ref`. */
   id: string;
+  /** The trip, or REQUESTS_QUEUE_ID for a driver request. */
   tripId: string;
-  kind: TripAction | 'report';
+  kind: TripAction | 'report' | 'request';
   createdAt: string;
   /** Server or phone-side failures (5xx / 408 / 429 / CLIENT_ERROR). */
   attempts: number;
@@ -48,11 +61,14 @@ export type QueueItem = {
   location?: GpsFix | null;
   /** The photo already carries the time/GPS stamp (else the server adds it). */
   stamped?: boolean;
+  /** kind 'request': what the driver asks the office for. */
+  request?: DriverRequestInput;
 };
 
 export type QueueHandlers = {
   onActionDone?: (item: QueueItem, trip: Trip) => void;
   onReportDone?: (item: QueueItem, report: Report) => void;
+  onRequestDone?: (item: QueueItem, result: DriverRequestResult) => void;
   /** 404: the trip is no longer assigned to this driver. */
   onTripGone?: (tripId: string, droppedItems: QueueItem[]) => void;
   /** Server refused the item for good (e.g. 409 trip cancelled). */
@@ -69,6 +85,8 @@ export const MAX_CLIENT_ATTEMPTS = 3;
 /** About 2.5 hours of "online but no answer" before an item stops holding back its trip. */
 export const MAX_NET_ATTEMPTS = 30;
 export const PHOTO_TOO_LARGE = 'Foto terlalu besar, coba ambil ulang';
+/** An older server without `/driver/requests`. */
+export const REQUEST_UNSUPPORTED = 'Server belum bisa menerima permintaan ini. Hubungi admin lewat WhatsApp.';
 
 let items: QueueItem[] = [];
 let loaded = false;
@@ -277,7 +295,16 @@ function locationFields(fix: GpsFix | null | undefined): Record<string, string |
     ...(fix.accuracy != null ? { location_accuracy_m: Math.round(fix.accuracy) } : {}),
     location_at: fix.at,
     ...(fix.mocked != null ? { location_mocked: fix.mocked } : {}),
+    // The place name the phone found for these coordinates (contract: at most 200 characters).
+    ...(fix.name?.trim() ? { location_name: fix.name.trim().slice(0, 200) } : {}),
   };
+}
+
+/** The POST answer is `{ request, already_open? }`; tolerate a bare request too. */
+function toRequestResult(data: unknown): DriverRequestResult {
+  const d = (data ?? {}) as Partial<DriverRequestResult> & Record<string, unknown>;
+  const request = (d.request ?? d) as DriverRequestResult['request'];
+  return { request, already_open: !!(d.already_open ?? (request as { already_open?: boolean })?.already_open) };
 }
 
 async function send(item: QueueItem) {
@@ -295,6 +322,18 @@ async function send(item: QueueItem) {
     const report = await api.uploadReport(item.tripId, form);
     handlers.onReportDone?.(item, report);
     deletePhoto(item.photoUri);
+  } else if (item.kind === 'request') {
+    // client_ref makes a resend return the same request (no second notice to the office).
+    const r = item.request;
+    const body: Record<string, string | number | boolean> = {
+      type: r?.type ?? 'ETOLL_TOPUP',
+      client_ref: item.id,
+      occurred_at: item.createdAt,
+    };
+    if (r?.card_label?.trim()) body.card_label = r.card_label.trim();
+    if (r?.balance != null) body.balance = r.balance;
+    if (r?.note?.trim()) body.note = r.note.trim();
+    handlers.onRequestDone?.(item, toRequestResult(await api.createRequest(body)));
   } else {
     // occurred_at keeps the real time of the tap when it was queued offline.
     // client_ref makes a resent action a no-op on the server (exactly once).
@@ -331,6 +370,8 @@ function update(id: string, patch: Partial<QueueItem>) {
 }
 
 const GAVE_UP = 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di tugas ini.';
+const GAVE_UP_REQUEST = 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di halaman Profil.';
+const gaveUp = (item: QueueItem) => (item.kind === 'request' ? GAVE_UP_REQUEST : GAVE_UP);
 
 async function run(): Promise<void> {
   do {
@@ -360,7 +401,7 @@ async function run(): Promise<void> {
       } catch (e) {
         // appendPhoto and other preparation can throw plain errors: those happened on the phone.
         const err = e instanceof ApiError ? e : new ApiError(CLIENT_ERROR, String((e as Error)?.message ?? e));
-        if (err.status === 404) {
+        if (err.status === 404 && item.kind !== 'request') {
           const dropped = dropTripItems(item.tripId);
           handlers.onTripGone?.(item.tripId, dropped);
         } else if (err.status === 401) {
@@ -376,19 +417,25 @@ async function run(): Promise<void> {
           const failed = netAttempts >= MAX_NET_ATTEMPTS;
           const delay = NET_BACKOFF_MS[Math.min(netAttempts - 1, NET_BACKOFF_MS.length - 1)];
           update(item.id, { netAttempts, failed, nextAttemptAt: Date.now() + delay, lastError: err.message });
-          if (failed) handlers.onRejected?.(item, GAVE_UP);
+          if (failed) handlers.onRejected?.(item, gaveUp(item));
           else blockedTrips.add(item.tripId); // other trips may still get through
         } else if (err.status === CLIENT_ERROR || err.status === 408 || err.status === 429 || err.status >= 500) {
           const attempts = item.attempts + 1;
           const failed = attempts >= (err.status === CLIENT_ERROR ? MAX_CLIENT_ATTEMPTS : MAX_ATTEMPTS);
           const delay = BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)];
           update(item.id, { attempts, failed, nextAttemptAt: Date.now() + delay, lastError: err.message });
-          if (failed) handlers.onRejected?.(item, `${GAVE_UP} (${err.message})`);
+          if (failed) handlers.onRejected?.(item, `${gaveUp(item)} (${err.message})`);
           else blockedTrips.add(item.tripId);
         } else {
           const gone = remove(item.id);
           deletePhoto(gone?.photoUri);
-          handlers.onRejected?.(item, err.status === 413 ? PHOTO_TOO_LARGE : err.message);
+          const message =
+            err.status === 413
+              ? PHOTO_TOO_LARGE
+              : err.status === 404 && item.kind === 'request'
+                ? REQUEST_UNSUPPORTED
+                : err.message;
+          handlers.onRejected?.(item, message);
         }
       }
     }

@@ -75,7 +75,7 @@ export function TripCard({ trip, onPress, pending }: { trip: Trip; onPress: () =
       ) : null}
       {isNew ? (
         <View style={styles.cta}>
-          <Text style={styles.ctaText}>Buka untuk terima tugas</Text>
+          <Text style={styles.ctaText}>Terima tugas</Text>
           <Ionicons name="chevron-forward" size={20} color={colors.white} />
         </View>
       ) : null}
