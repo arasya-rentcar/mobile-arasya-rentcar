@@ -164,7 +164,8 @@ export function EtollRequest({ etollCard, enabled }: { etollCard: string | null 
             <TextInput
               testID="etoll-balance-input"
               value={balance != null ? formatThousands(balance) : ''}
-              onChangeText={(t) => setBalanceText(t.replace(/\D/g, '').slice(0, 9))}
+              // 8 digits: the server refuses more than Rp 100.000.000 (the request would be dropped).
+              onChangeText={(t) => setBalanceText(t.replace(/\D/g, '').slice(0, 8))}
               keyboardType="number-pad"
               placeholder="0"
               placeholderTextColor="#8593a3"
