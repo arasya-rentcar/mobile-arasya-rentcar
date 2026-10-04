@@ -123,6 +123,7 @@ function AppNavigator() {
         <Stack.Screen name="arrive/[id]" options={{ title: 'Sampai di lokasi jemput', presentation: 'modal' }} />
         <Stack.Screen name="notifications" options={{ title: 'Notifikasi' }} />
         <Stack.Screen name="profile" options={{ title: 'Profil' }} />
+        <Stack.Screen name="nfc-test" options={{ title: 'Tes kartu NFC' }} />
       </Stack>
       {session.status === 'loading' ? (
         <View

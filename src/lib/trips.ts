@@ -17,7 +17,16 @@ import { queryClient } from './queryClient';
 import { applyPending } from './tripState';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { DriverRequest, DriverRequestResult, GpsFix, NotificationPage, Report, Trip, TripDetail } from './types';
+import type {
+  DriverRequest,
+  DriverRequestResult,
+  EtollCard,
+  GpsFix,
+  NotificationPage,
+  Report,
+  Trip,
+  TripDetail,
+} from './types';
 
 export const keys = {
   me: ['me'] as const,
@@ -25,6 +34,7 @@ export const keys = {
   trips: (scope: 'active' | 'history') => ['trips', scope] as const,
   trip: (id: string) => ['trip', id] as const,
   requests: ['requests'] as const,
+  etollCards: ['etollCards'] as const,
 };
 
 export function useMe(enabled = true) {
@@ -130,6 +140,75 @@ export function requestEtollTopup(input: Omit<DriverRequestInput, 'type'>) {
   return enqueue({ tripId: REQUESTS_QUEUE_ID, kind: 'request', request: { type: 'ETOLL_TOPUP', ...input } });
 }
 
+/**
+ * The office e-toll cards (`null` = a server without the card pool: the screen falls back to
+ * the free-text top-up request). Actions still on the phone are applied on top, so a card taken
+ * or returned without signal shows that right away.
+ */
+export function useEtollCards(enabled = true) {
+  const query = useQuery<EtollCard[] | null>({
+    queryKey: keys.etollCards,
+    queryFn: async () => {
+      try {
+        return (await api.etollCards()).items ?? [];
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled,
+  });
+  const queue = useQueue();
+  const cards = useMemo(() => (query.data ? applyPendingCards(query.data, queue) : query.data), [query.data, queue]);
+  return { ...query, cards };
+}
+
+export function applyPendingCards(cards: EtollCard[], queue: QueueItem[]): EtollCard[] {
+  let out = cards;
+  for (const item of queue) {
+    const e = item.kind === 'etoll' ? item.etoll : undefined;
+    if (!e || item.failed) continue;
+    out = out.map((c) => {
+      if (c.id !== e.cardId) return c;
+      const read = e.balance != null ? { balance: e.balance, balance_at: item.createdAt } : {};
+      if (e.action === 'take') return { ...c, ...read, holder: { mine: true, name: 'Anda', taken_at: item.createdAt } };
+      if (e.action === 'return') return { ...c, ...read, holder: c.holder?.mine ? null : c.holder };
+      return { ...c, ...read };
+    });
+  }
+  return out;
+}
+
+/** The trip running now, if any: a card taken from the profile is linked to it. */
+function runningTripId(): string | undefined {
+  return queryClient.getQueryData<Trip[]>(keys.trips('active'))?.find((t) => t.status === 'IN_PROGRESS')?.id;
+}
+
+/** "Ambil kartu" / "Kembalikan kartu" / "Catat sisa saldo": offline queue, sent once. */
+export function etollCardAction(
+  action: 'take' | 'return' | 'balance',
+  card: Pick<EtollCard, 'id' | 'name'>,
+  balance?: number | null,
+) {
+  return enqueue({
+    tripId: REQUESTS_QUEUE_ID,
+    kind: 'etoll',
+    etoll: {
+      action,
+      cardId: card.id,
+      cardName: card.name,
+      balance: balance ?? undefined,
+      ...(action === 'take' ? { tripId: runningTripId() } : {}),
+    },
+  });
+}
+
+function putCard(card: EtollCard) {
+  queryClient.setQueryData<EtollCard[] | null>(keys.etollCards, (old) =>
+    old ? old.map((c) => (c.id === card.id ? card : c)) : old,
+  );
+}
+
 function putRequest(request: DriverRequest) {
   queryClient.setQueryData<DriverRequest[]>(keys.requests, (old) =>
     old ? [request, ...old.filter((r) => r.id !== request.id)] : [request],
@@ -207,12 +286,29 @@ export const queueHandlers = {
   onRequestDone(_item: QueueItem, result: DriverRequestResult) {
     if (result.request?.id) putRequest(result.request);
     void queryClient.invalidateQueries({ queryKey: keys.requests });
+    // The balance typed with the request is the card's newest known balance.
+    void queryClient.invalidateQueries({ queryKey: keys.etollCards });
     showNotice(
       result.already_open
         ? 'Permintaan top-up sebelumnya masih menunggu admin. Tidak perlu minta lagi.'
         : 'Permintaan top-up e-toll sudah sampai ke admin.',
       result.already_open ? 'info' : 'success',
       6000,
+    );
+  },
+  onEtollDone(item: QueueItem, card: EtollCard) {
+    if (card?.id) putCard(card);
+    void queryClient.invalidateQueries({ queryKey: keys.etollCards });
+    void queryClient.invalidateQueries({ queryKey: keys.me });
+    const name = card?.name ?? item.etoll?.cardName ?? '';
+    const action = item.etoll?.action;
+    showNotice(
+      action === 'take'
+        ? `Kartu e-toll ${name} tercatat Anda pegang.`
+        : action === 'return'
+          ? `Kartu e-toll ${name} tercatat sudah dikembalikan.`
+          : `Sisa saldo kartu ${name} tercatat.`,
+      'success',
     );
   },
   onTripGone(tripId: string, dropped: QueueItem[]) {
@@ -222,6 +318,11 @@ export const queueHandlers = {
     if (item.kind === 'request') {
       showNotice(`Permintaan top-up tidak bisa dikirim: ${message}`, 'error', 8000);
       void queryClient.invalidateQueries({ queryKey: keys.requests });
+      return;
+    }
+    if (item.kind === 'etoll') {
+      showNotice(`Data kartu e-toll ${item.etoll?.cardName ?? ''} tidak bisa dikirim: ${message}`, 'error', 8000);
+      void queryClient.invalidateQueries({ queryKey: keys.etollCards });
       return;
     }
     const what = item.kind === 'report' ? 'Laporan' : 'Perubahan status';

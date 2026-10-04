@@ -1,6 +1,7 @@
 /**
  * Offline queue for everything a driver sends: trip actions (accept / start / arrive / finish),
- * reports, and requests to the office (e-toll top-up). Items are persisted in AsyncStorage, sent
+ * reports, requests to the office (e-toll top-up) and the office e-toll card actions (take /
+ * return / balance read). Items are persisted in AsyncStorage, sent
  * in the order they were made, and retried with backoff while there is no signal. Every item
  * carries a `client_ref` (the item id) so a resend after a lost response never creates a
  * duplicate on the server.
@@ -23,15 +24,29 @@ import * as Crypto from 'expo-crypto';
 import { api, ApiError, CLIENT_ERROR } from './api';
 import { getOnline } from './network';
 import { appendPhoto, deletePhoto } from './photos';
-import type { DriverRequestResult, DriverRequestType, GpsFix, Report, ReportType, Trip } from './types';
+import type {
+  DriverRequestResult,
+  DriverRequestType,
+  EtollAction,
+  EtollCard,
+  GpsFix,
+  Report,
+  ReportType,
+  Trip,
+} from './types';
 
 export type TripAction = 'accept' | 'start' | 'arrive' | 'board' | 'finish';
 
-/** `tripId` of driver requests: they belong to no trip, but keep their own order like a trip. */
+/**
+ * `tripId` of driver requests and e-toll card actions: they belong to no trip, but keep their own
+ * order like a trip (a card taken offline is taken before the top-up asked for it).
+ */
 export const REQUESTS_QUEUE_ID = 'driver-requests';
 
 export type DriverRequestInput = {
   type: DriverRequestType;
+  /** The office card (newer servers); card_label is the text fallback. */
+  card_id?: string;
   card_label?: string;
   /** Rupiah. */
   balance?: number | null;
@@ -43,7 +58,7 @@ export type QueueItem = {
   id: string;
   /** The trip, or REQUESTS_QUEUE_ID for a driver request. */
   tripId: string;
-  kind: TripAction | 'report' | 'request';
+  kind: TripAction | 'report' | 'request' | 'etoll';
   createdAt: string;
   /** Server or phone-side failures (5xx / 408 / 429 / CLIENT_ERROR). */
   attempts: number;
@@ -63,12 +78,27 @@ export type QueueItem = {
   stamped?: boolean;
   /** kind 'request': what the driver asks the office for. */
   request?: DriverRequestInput;
+  /** kind 'etoll': take / return an office e-toll card, or the balance read on it. */
+  etoll?: EtollInput;
+};
+
+export type EtollInput = {
+  action: EtollAction;
+  cardId: string;
+  /** Shown while it waits ("Flazz 3"). */
+  cardName?: string;
+  /** Rupiah read on the card (optional for take / return). */
+  balance?: number | null;
+  /** The trip the card was taken for. */
+  tripId?: string;
+  source?: 'MANUAL' | 'NFC';
 };
 
 export type QueueHandlers = {
   onActionDone?: (item: QueueItem, trip: Trip) => void;
   onReportDone?: (item: QueueItem, report: Report) => void;
   onRequestDone?: (item: QueueItem, result: DriverRequestResult) => void;
+  onEtollDone?: (item: QueueItem, card: EtollCard) => void;
   /** 404: the trip is no longer assigned to this driver. */
   onTripGone?: (tripId: string, droppedItems: QueueItem[]) => void;
   /** Server refused the item for good (e.g. 409 trip cancelled). */
@@ -335,10 +365,22 @@ async function send(item: QueueItem) {
       client_ref: item.id,
       occurred_at: item.createdAt,
     };
-    if (r?.card_label?.trim()) body.card_label = r.card_label.trim();
+    if (r?.card_id) body.card_id = r.card_id;
+    else if (r?.card_label?.trim()) body.card_label = r.card_label.trim();
     if (r?.balance != null) body.balance = r.balance;
     if (r?.note?.trim()) body.note = r.note.trim();
     handlers.onRequestDone?.(item, toRequestResult(await api.createRequest(body)));
+  } else if (item.kind === 'etoll') {
+    const e = item.etoll!;
+    const body: Record<string, string | number | boolean> = {
+      client_ref: item.id,
+      occurred_at: item.createdAt,
+      source: e.source ?? 'MANUAL',
+    };
+    if (e.balance != null) body.balance = e.balance;
+    if (e.action === 'take' && e.tripId) body.trip_id = e.tripId;
+    const res = await api.etollAction(e.cardId, e.action, body);
+    handlers.onEtollDone?.(item, res.card);
   } else {
     // occurred_at keeps the real time of the tap when it was queued offline.
     // client_ref makes a resent action a no-op on the server (exactly once).
@@ -376,7 +418,9 @@ function update(id: string, patch: Partial<QueueItem>) {
 
 const GAVE_UP = 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di tugas ini.';
 const GAVE_UP_REQUEST = 'gagal terkirim berkali-kali. Ketuk "Coba lagi" atau "Hapus" di halaman Profil.';
-const gaveUp = (item: QueueItem) => (item.kind === 'request' ? GAVE_UP_REQUEST : GAVE_UP);
+/** Requests and e-toll card actions belong to no trip; they are shown on the Profile page. */
+export const isOfficeItem = (item: Pick<QueueItem, 'kind'>) => item.kind === 'request' || item.kind === 'etoll';
+const gaveUp = (item: QueueItem) => (isOfficeItem(item) ? GAVE_UP_REQUEST : GAVE_UP);
 
 async function run(): Promise<void> {
   do {
@@ -406,7 +450,7 @@ async function run(): Promise<void> {
       } catch (e) {
         // appendPhoto and other preparation can throw plain errors: those happened on the phone.
         const err = e instanceof ApiError ? e : new ApiError(CLIENT_ERROR, String((e as Error)?.message ?? e));
-        if (err.status === 404 && item.kind !== 'request') {
+        if (err.status === 404 && !isOfficeItem(item)) {
           const dropped = dropTripItems(item.tripId);
           handlers.onTripGone?.(item.tripId, dropped);
         } else if (err.status === 401) {

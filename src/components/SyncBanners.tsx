@@ -15,13 +15,15 @@ export function SyncBanners({ tripId }: { tripId?: string }) {
   const items = all.filter((q) => !q.failed);
   const reports = items.filter((q) => q.kind === 'report').length;
   const requests = items.filter((q) => q.kind === 'request').length;
-  const actions = items.length - reports - requests;
+  const cards = items.filter((q) => q.kind === 'etoll').length;
+  const actions = items.length - reports - requests - cards;
   if (online && !all.length) return null;
 
   const parts: string[] = [];
   if (reports) parts.push(`${reports} laporan`);
   if (actions) parts.push(`${actions} perubahan status`);
   if (requests) parts.push(`${requests} permintaan`);
+  if (cards) parts.push(`${cards} data kartu e-toll`);
   return (
     <View style={styles.wrap}>
       {!online ? (
