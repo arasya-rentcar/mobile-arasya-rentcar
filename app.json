@@ -29,7 +29,8 @@
         "android.permission.CAMERA",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.NFC"
       ],
       "softwareKeyboardLayoutMode": "resize",
       "predictiveBackGestureEnabled": false
@@ -80,6 +81,13 @@
           "locationWhenInUsePermission": "Lokasi dicatat saat Anda sampai di lokasi jemput, supaya kantor bisa mengecek.",
           "isAndroidBackgroundLocationEnabled": false,
           "isAndroidForegroundServiceEnabled": false
+        }
+      ],
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "NFC dipakai untuk membaca saldo kartu e-toll.",
+          "includeNdefEntitlement": false
         }
       ]
     ],

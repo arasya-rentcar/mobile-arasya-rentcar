@@ -1,5 +1,15 @@
 import { API_URL } from './config';
-import type { DriverProfile, DriverRequest, NotificationPage, Report, Trip, TripDetail, User } from './types';
+import type {
+  DriverProfile,
+  DriverRequest,
+  EtollAction,
+  EtollCard,
+  NotificationPage,
+  Report,
+  Trip,
+  TripDetail,
+  User,
+} from './types';
 
 /** `ApiError.status` when the request failed on the phone itself (e.g. the photo could not be read). */
 export const CLIENT_ERROR = -1;
@@ -138,6 +148,14 @@ export const api = {
   /** Answer: `{ request, already_open? }` (normalised by the queue). */
   createRequest: (body: Record<string, string | number | boolean>) =>
     request<unknown>('/driver/requests', { method: 'POST', body }),
+  /** Active office e-toll cards: the ones this driver holds first, then the ones at the office. */
+  etollCards: () => request<{ items: EtollCard[] }>('/driver/etoll-cards'),
+  /** "Ambil kartu" / "Kembalikan kartu" / "Catat sisa saldo" (client_ref: sent once). */
+  etollAction: (cardId: string, action: EtollAction, body: Record<string, string | number | boolean>) =>
+    request<{ card: EtollCard; returned?: boolean }>(`/driver/etoll-cards/${encodeURIComponent(cardId)}/${action}`, {
+      method: 'POST',
+      body,
+    }),
   notifications: (before?: string) =>
     request<NotificationPage>(`/driver/notifications${before ? `?before=${encodeURIComponent(before)}` : ''}`),
   readNotifications: (input: { ids?: string[]; all?: boolean }) =>

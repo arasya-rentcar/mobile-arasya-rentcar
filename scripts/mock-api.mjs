@@ -152,8 +152,32 @@ function locationError(f) {
   return null;
 }
 
-// Driver requests (POST /driver/requests): e-toll top-up. One OPEN request per type; client_ref makes
-// a resend return the same request.
+// Office e-toll cards (GET /driver/etoll-cards): a shared pool; the driver takes one when a trip
+// starts and returns it at the garage. Like the API: last four digits only, balance = estimate,
+// take/return/balance idempotent on client_ref. ETOLL_CARDS=0 starts with an empty pool (the app
+// then keeps the free-text top-up request).
+const ISSUER_LABEL = { MANDIRI: 'Mandiri e-Money', BCA: 'BCA Flazz', BRI: 'BRI Brizzi', BNI: 'BNI TapCash', DKI: 'JakCard', OTHER: '' };
+const etollCards = process.env.ETOLL_CARDS === '0' ? [] : [
+  { id: 'card-flazz-1', issuer: 'BCA', name: 'Flazz 1', number: '6019002512345678', balance: 245000, balance_at: at(-1, '18:10'), holder: null },
+  { id: 'card-emoney-2', issuer: 'MANDIRI', name: 'e-Money 2', number: '6032984011112222', balance: 35000, balance_at: at(0, '06:40'), holder: { driver_id: 'drv-2', name: 'Agus Pratama', taken_at: at(0, '06:40') } },
+  { id: 'card-brizzi-3', issuer: 'BRI', name: 'Brizzi 3', number: '6013500133334444', balance: 115500, balance_at: at(-2, '20:05'), holder: null },
+  { id: 'card-tapcash-4', issuer: 'BNI', name: 'TapCash 4', number: '7546990055556666', balance: null, balance_at: null, holder: null },
+];
+const etollRefs = new Map(); // client_ref -> card id (take / return / balance)
+const cardLabel = (c) => [ISSUER_LABEL[c.issuer], `${c.name} ••••${c.number.slice(-4)}`].filter(Boolean).join(' · ');
+const heldCard = () => etollCards.find((c) => c.holder?.driver_id === driver.id);
+function driverCard(c) {
+  const open = requests.find((r) => r.card_id === c.id && r.status === 'OPEN');
+  return {
+    id: c.id, issuer: c.issuer, issuer_label: ISSUER_LABEL[c.issuer], name: c.name, card_last4: c.number.slice(-4),
+    label: cardLabel(c), balance: c.balance, balance_at: c.balance_at,
+    holder: c.holder ? { mine: c.holder.driver_id === driver.id, name: c.holder.name, taken_at: c.holder.taken_at } : null,
+    open_request: open ? { id: open.id, mine: open.driver_id === driver.id, created_at: open.created_at } : null,
+  };
+}
+
+// Driver requests (POST /driver/requests): e-toll top-up. One OPEN request per card (or per type
+// without a card); client_ref makes a resend return the same request.
 const requests = [];
 const requestRefs = new Map(); // client_ref -> request
 const REQUEST_TYPES = ['ETOLL_TOPUP'];
@@ -288,7 +312,45 @@ const server = http.createServer(async (req, res) => {
     if (!p.startsWith('/driver')) return fail(res, 404, 'Not found');
     if (role !== 'DRIVER') return fail(res, 403, 'Khusus driver');
 
-    if (req.method === 'GET' && p === '/driver/me') return ok(res, driver);
+    if (req.method === 'GET' && p === '/driver/me') {
+      const held = heldCard();
+      return ok(res, { ...driver, etoll_card: held ? cardLabel(held) : driver.etoll_card });
+    }
+
+    if (req.method === 'GET' && p === '/driver/etoll-cards') {
+      const rank = (c) => (c.holder?.driver_id === driver.id ? 0 : c.holder ? 2 : 1);
+      return ok(res, { items: [...etollCards].sort((a, b) => rank(a) - rank(b)).map(driverCard) });
+    }
+    const cardAction = /^\/driver\/etoll-cards\/([^/]+)\/(take|return|balance)$/.exec(p);
+    if (req.method === 'POST' && cardAction) {
+      const body = JSON.parse((await readBody(req)).toString() || '{}');
+      const c = etollCards.find((x) => x.id === cardAction[1]);
+      if (!c) return fail(res, 404, 'Kartu e-toll tidak ditemukan');
+      if (!body.client_ref || !UUID_RE.test(body.client_ref)) return fail(res, 400, 'client_ref harus UUID');
+      const balanceSent = body.balance != null && body.balance !== '';
+      if (balanceSent && !(Number(body.balance) >= 0 && Number(body.balance) <= 100_000_000)) return fail(res, 400, 'balance tidak valid');
+      if (cardAction[2] === 'balance' && !balanceSent) return fail(res, 400, 'balance wajib diisi');
+      if (etollRefs.has(body.client_ref)) return ok(res, { card: driverCard(c) });
+      etollRefs.set(body.client_ref, c.id);
+      const when = body.occurred_at || now;
+      if (balanceSent) Object.assign(c, { balance: Math.round(Number(body.balance)), balance_at: when });
+      if (cardAction[2] === 'take') {
+        if (c.holder?.driver_id === driver.id) return ok(res, { card: driverCard(c) });
+        const from = c.holder?.name;
+        c.holder = { driver_id: driver.id, name: driver.name, taken_at: when };
+        console.log(`  admin notification: ${driver.name} mengambil kartu e-toll ${c.name}${from ? ` (sebelumnya ${from})` : ''}`);
+        return ok(res, { card: driverCard(c) }, 201);
+      }
+      if (cardAction[2] === 'return') {
+        const mine = c.holder?.driver_id === driver.id;
+        if (mine) {
+          c.holder = null;
+          console.log(`  admin notification: ${driver.name} mengembalikan kartu e-toll ${c.name}`);
+        }
+        return ok(res, { returned: mine, card: driverCard(c) });
+      }
+      return ok(res, { card: driverCard(c) }, 201);
+    }
 
     if (req.method === 'GET' && p === '/driver/requests') {
       // Like the API: case-insensitive, default `all`.
@@ -312,11 +374,17 @@ const server = http.createServer(async (req, res) => {
         return fail(res, 400, 'balance tidak valid');
       const again = requestRefs.get(body.client_ref);
       if (again) return ok(res, { request: publicRequest(again) });
-      const open = requests.find((r) => r.type === body.type && r.status === 'OPEN');
+      // An older app sends no card_id: the card the driver holds, when the label matches it.
+      const held = heldCard();
+      const cardId = body.card_id || (held && (!body.card_label || body.card_label === cardLabel(held)) ? held.id : null);
+      const card = cardId ? etollCards.find((c) => c.id === cardId) : null;
+      if (cardId && !card) return fail(res, 404, 'Kartu e-toll tidak ditemukan');
+      const open = requests.find((r) => r.type === body.type && r.status === 'OPEN' && (card ? r.card_id === card.id : true));
       if (open) return ok(res, { request: publicRequest(open), already_open: true });
+      if (card && balanceSent) Object.assign(card, { balance: Math.round(Number(body.balance)), balance_at: body.occurred_at || now });
       const r = {
-        id: randomUUID(), driver_id: driver.id, type: body.type,
-        card_label: body.card_label?.trim() || driver.etoll_card || null,
+        id: randomUUID(), driver_id: driver.id, type: body.type, card_id: card?.id ?? null,
+        card_label: card ? cardLabel(card) : body.card_label?.trim() || driver.etoll_card || null,
         balance: balanceSent ? Math.round(Number(body.balance)) : null,
         note: body.note?.trim() || null, status: 'OPEN', client_ref: body.client_ref,
         created_at: body.occurred_at || now, handled_at: null, handled_by: null, handled_note: null,
@@ -334,11 +402,18 @@ const server = http.createServer(async (req, res) => {
       if (!r) return fail(res, 404, 'Permintaan tidak ditemukan');
       if (r.status !== 'OPEN') return fail(res, 409, 'Permintaan sudah diproses');
       Object.assign(r, { status: 'DONE', handled_at: now, handled_by: 'usr-admin-1', handled_note: body.note?.trim() || null });
+      // { amount } records the top-up on the request's card (the estimate goes up).
+      const amount = body.amount != null ? Math.round(Number(body.amount)) : null;
+      const c = etollCards.find((x) => x.id === r.card_id);
+      if (c && amount && c.balance != null) c.balance += amount;
       // Same push/inbox text and data as the API's markRequestDone.
-      const card = r.card_label ? `Kartu ${r.card_label.replace(/^kartu\s+/i, '')}` : 'Saldo e-toll';
+      const card = c
+        ? `Kartu ${c.name.replace(/^kartu\s+/i, '')} ••••${c.number.slice(-4)}`
+        : r.card_label ? `Kartu ${r.card_label.replace(/^kartu\s+/i, '')}` : 'Saldo e-toll';
+      const head = amount ? `${card} sudah diisi Rp ${amount.toLocaleString('id-ID')}.` : r.handled_note ? `${card}.` : `${card} sudah diisi.`;
       notifications.push({
         id: randomUUID(), type: 'driver_request_done', title: 'Top-up e-toll sudah diproses', read: false, created_at: now,
-        body: r.handled_note ? `${card}. ${r.handled_note}` : `${card} sudah diisi. Cek saldonya sebelum jalan.`,
+        body: [head, r.handled_note, 'Jangan lupa update saldo kartu (tempel kartu) sebelum masuk tol.'].filter(Boolean).join(' '),
         data: { type: 'driver_request_done', request_id: r.id, request_type: r.type },
       });
       return ok(res, { request: publicRequest(r) });

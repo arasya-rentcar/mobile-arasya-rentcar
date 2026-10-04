@@ -139,6 +139,8 @@ export type DriverRequestType = 'ETOLL_TOPUP';
 export type DriverRequest = {
   id: string;
   type: DriverRequestType | string;
+  /** The office card it is about (null for requests that named the card in text). */
+  card_id?: string | null;
   card_label: string | null;
   /** Remaining balance in rupiah the driver typed (Decimal on the server, may come as a string). */
   balance: number | string | null;
@@ -151,3 +153,26 @@ export type DriverRequest = {
 
 /** `POST /driver/requests`: the request, and whether an open one of the same type already existed. */
 export type DriverRequestResult = { request: DriverRequest; already_open?: boolean };
+
+/**
+ * An office e-toll card as the driver app sees it (`GET /driver/etoll-cards`): the cards are a
+ * shared pool, the driver takes one when a trip starts and returns it at the garage. Only the
+ * last four digits of the number. `balance` is the office's estimate (last balance read plus
+ * top-ups minus tolls since); the real balance is on the card's chip.
+ */
+export type EtollCard = {
+  id: string;
+  issuer: string;
+  issuer_label: string;
+  name: string;
+  card_last4: string;
+  /** "BCA Flazz · Kartu 3 ••••5678" */
+  label: string;
+  balance: number | null;
+  /** When the last known balance was read. */
+  balance_at: string | null;
+  holder: { mine: boolean; name: string; taken_at: string } | null;
+  open_request: { id: string; mine: boolean; created_at: string } | null;
+};
+
+export type EtollAction = 'take' | 'return' | 'balance';

@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import { useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { EtollRequest } from '@/components/EtollRequest';
+import { EtollCards } from '@/components/EtollCards';
 import { Banner, Button, Card, Dialog } from '@/components/ui';
 import { API_URL, colors, font } from '@/lib/config';
 import { useOnline } from '@/lib/network';
@@ -30,7 +30,7 @@ export default function ProfileScreen() {
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // The office may have changed the e-toll card: fresh profile whenever the page comes into view.
+  // Fresh profile whenever the page comes into view (the held e-toll card may have changed).
   const refetchMe = me.refetch;
   useFocusEffect(
     useCallback(() => {
@@ -40,7 +40,11 @@ export default function ProfileScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([me.refetch(), isDriver ? queryClient.refetchQueries({ queryKey: keys.requests }) : null]);
+    await Promise.all([
+      me.refetch(),
+      isDriver ? queryClient.refetchQueries({ queryKey: keys.requests }) : null,
+      isDriver ? queryClient.refetchQueries({ queryKey: keys.etollCards }) : null,
+    ]);
     setRefreshing(false);
   };
 
@@ -76,7 +80,7 @@ export default function ProfileScreen() {
         ) : null}
       </Card>
 
-      {isDriver ? <EtollRequest etollCard={me.data?.etoll_card} enabled={isDriver} /> : null}
+      {isDriver ? <EtollCards etollCard={me.data?.etoll_card} enabled={isDriver} /> : null}
 
       {queue.length ? (
         <Card style={{ gap: 10 }}>

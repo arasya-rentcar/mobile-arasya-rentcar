@@ -1,6 +1,6 @@
 # Arasya Driver
 
-Aplikasi Android untuk driver **Arasya Rent Car**, pengganti bot WhatsApp. Driver menerima tugas lewat notifikasi, melihat detail perjalanan, menekan **Terima tugas → Berangkat → Sampai di lokasi jemput → Selesai**, dan mengirim laporan (foto odometer, struk bensin/tol/parkir/biaya lain, foto checkpoint & catatan). Foto di lokasi jemput, foto checkpoint ("Checkpoint 1, 2, …"; judulnya dari kolom catatan) dan foto struk bensin/tol/parkir/biaya lain diambil dengan kamera GPS: jam, nama driver, nama lokasi, dan titik GPS tercetak di foto. Di halaman Profil driver bisa **Minta top-up e-toll**.
+Aplikasi Android untuk driver **Arasya Rent Car**, pengganti bot WhatsApp. Driver menerima tugas lewat notifikasi, melihat detail perjalanan, menekan **Terima tugas → Berangkat → Sampai di lokasi jemput → Selesai**, dan mengirim laporan (foto odometer, struk bensin/tol/parkir/biaya lain, foto checkpoint & catatan). Foto di lokasi jemput, foto checkpoint ("Checkpoint 1, 2, …"; judulnya dari kolom catatan) dan foto struk bensin/tol/parkir/biaya lain diambil dengan kamera GPS: jam, nama driver, nama lokasi, dan titik GPS tercetak di foto. Kartu e-toll kantor dipakai bergiliran: di halaman Profil driver **Ambil kartu** saat menerima kartu dari tim operasional, **Minta top-up** untuk kartu itu, **Catat saldo**, dan **Kembalikan** saat kembali ke garasi (semua tersimpan di HP bila tanpa sinyal). **Tes kartu NFC** (Android) membaca kartu tanpa mengubahnya, untuk uji per bank.
 
 Semua yang dikirim driver masuk **antrean offline** dulu: kalau sinyal hilang, data disimpan di HP dan dikirim otomatis (berurutan, dengan jeda percobaan ulang) saat sinyal kembali. Laporan memakai `client_ref` (UUID), jadi pengiriman ulang tidak pernah membuat laporan ganda.
 
@@ -28,7 +28,7 @@ EXPO_PUBLIC_API_URL=http://localhost:4010/api/v1 npx expo start --web
 
 Login driver: `0812345678` / `test1234`. Login admin (untuk melihat layar "khusus driver"): `admin@arasya.id` / `admin123`. Data contoh: tugas baru besok yang belum diterima (Bogor → Bandara Soekarno-Hatta), tugas hari ini yang sudah diterima (Jakarta → Bandung, Innova Reborn B 1234 ABC), tugas 3 hari ke Yogyakarta, dan satu tugas selesai di Riwayat.
 
-Bantuan uji di mock: `POST /api/v1/driver/__mock/pay/<id tugas>` (admin mencatat pelunasan) dan `POST /api/v1/driver/__mock/requests/<id permintaan>/done` (admin memproses top-up e-toll; driver dapat notifikasi).
+Bantuan uji di mock: `POST /api/v1/driver/__mock/pay/<id tugas>` (admin mencatat pelunasan) dan `POST /api/v1/driver/__mock/requests/<id permintaan>/done` dengan `{"amount": 100000}` (admin memproses top-up e-toll; saldo kartu naik, driver dapat notifikasi). Mock punya 4 kartu e-toll (satu dipegang driver lain); `ETOLL_CARDS=0` memulai tanpa kartu (aplikasi memakai permintaan top-up teks bebas).
 
 Pemeriksaan: `npx tsc --noEmit` dan `npx expo export --platform android`.
 
