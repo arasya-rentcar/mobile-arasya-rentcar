@@ -1,6 +1,6 @@
 # Arasya Driver
 
-Aplikasi Android untuk driver **Arasya Rent Car**, pengganti bot WhatsApp. Driver menerima tugas lewat notifikasi, melihat detail perjalanan, menekan **Terima tugas → Berangkat → Sampai di lokasi jemput → Selesai**, dan mengirim laporan (foto odometer, struk bensin/tol/parkir/biaya lain, foto checkpoint & catatan). Foto di lokasi jemput dan foto checkpoint ("Checkpoint 1, 2, …") diambil dengan kamera GPS: jam, nama driver, nama lokasi, dan titik GPS tercetak di foto. Di halaman Profil driver bisa **Minta top-up e-toll**.
+Aplikasi Android untuk driver **Arasya Rent Car**, pengganti bot WhatsApp. Driver menerima tugas lewat notifikasi, melihat detail perjalanan, menekan **Terima tugas → Berangkat → Sampai di lokasi jemput → Selesai**, dan mengirim laporan (foto odometer, struk bensin/tol/parkir/biaya lain, foto checkpoint & catatan). Foto di lokasi jemput, foto checkpoint ("Checkpoint 1, 2, …"; judulnya dari kolom catatan) dan foto struk bensin/tol/parkir/biaya lain diambil dengan kamera GPS: jam, nama driver, nama lokasi, dan titik GPS tercetak di foto. Di halaman Profil driver bisa **Minta top-up e-toll**.
 
 Semua yang dikirim driver masuk **antrean offline** dulu: kalau sinyal hilang, data disimpan di HP dan dikirim otomatis (berurutan, dengan jeda percobaan ulang) saat sinyal kembali. Laporan memakai `client_ref` (UUID), jadi pengiriman ulang tidak pernah membuat laporan ganda.
 
