@@ -157,7 +157,8 @@ function locationError(f) {
 const requests = [];
 const requestRefs = new Map(); // client_ref -> request
 const REQUEST_TYPES = ['ETOLL_TOPUP'];
-const publicRequest = ({ driver_id, client_ref, ...r }) => r;
+// Same fields as the API's toRequest (balance is a number there).
+const publicRequest = (r) => ({ ...r });
 const files = new Map(); // name -> Buffer
 const devices = new Set();
 
@@ -290,7 +291,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/driver/me') return ok(res, driver);
 
     if (req.method === 'GET' && p === '/driver/requests') {
-      const status = url.searchParams.get('status') || 'open';
+      // Like the API: case-insensitive, default `all`.
+      const status = (url.searchParams.get('status') || 'all').toLowerCase();
       if (!['open', 'all'].includes(status)) return fail(res, 400, 'status harus open atau all');
       const list = requests
         .filter((r) => status === 'all' || r.status === 'OPEN')
@@ -305,7 +307,9 @@ const server = http.createServer(async (req, res) => {
       if (body.occurred_at && Number.isNaN(Date.parse(body.occurred_at))) return fail(res, 400, 'occurred_at tidak valid');
       if (body.card_label != null && String(body.card_label).length > 60) return fail(res, 400, 'card_label maksimal 60 karakter');
       if (body.note != null && String(body.note).length > 500) return fail(res, 400, 'note terlalu panjang');
-      if (body.balance != null && !(Number(body.balance) >= 0)) return fail(res, 400, 'balance tidak valid');
+      const balanceSent = body.balance != null && body.balance !== '';
+      if (balanceSent && !(Number(body.balance) >= 0 && Number(body.balance) <= 100_000_000))
+        return fail(res, 400, 'balance tidak valid');
       const again = requestRefs.get(body.client_ref);
       if (again) return ok(res, { request: publicRequest(again) });
       const open = requests.find((r) => r.type === body.type && r.status === 'OPEN');
@@ -313,7 +317,7 @@ const server = http.createServer(async (req, res) => {
       const r = {
         id: randomUUID(), driver_id: driver.id, type: body.type,
         card_label: body.card_label?.trim() || driver.etoll_card || null,
-        balance: body.balance != null ? String(body.balance) : null, // Decimal on the API
+        balance: balanceSent ? Math.round(Number(body.balance)) : null,
         note: body.note?.trim() || null, status: 'OPEN', client_ref: body.client_ref,
         created_at: body.occurred_at || now, handled_at: null, handled_by: null, handled_note: null,
       };
@@ -330,10 +334,12 @@ const server = http.createServer(async (req, res) => {
       if (!r) return fail(res, 404, 'Permintaan tidak ditemukan');
       if (r.status !== 'OPEN') return fail(res, 409, 'Permintaan sudah diproses');
       Object.assign(r, { status: 'DONE', handled_at: now, handled_by: 'usr-admin-1', handled_note: body.note?.trim() || null });
+      // Same push/inbox text and data as the API's markRequestDone.
+      const card = r.card_label ? `Kartu ${r.card_label.replace(/^kartu\s+/i, '')}` : 'Saldo e-toll';
       notifications.push({
         id: randomUUID(), type: 'driver_request_done', title: 'Top-up e-toll sudah diproses', read: false, created_at: now,
-        body: [r.card_label ? `Kartu ${r.card_label}` : null, r.handled_note].filter(Boolean).join(' · ') || 'Saldo e-toll sudah diisi.',
-        data: { type: 'driver_request_done', driver_request_id: r.id },
+        body: r.handled_note ? `${card}. ${r.handled_note}` : `${card} sudah diisi. Cek saldonya sebelum jalan.`,
+        data: { type: 'driver_request_done', request_id: r.id, request_type: r.type },
       });
       return ok(res, { request: publicRequest(r) });
     }
@@ -420,7 +426,7 @@ const server = http.createServer(async (req, res) => {
         file_url = `http://${req.headers.host}/uploads/${name}`;
       }
       const amount = fields.amount ? parseInt(fields.amount, 10) : null;
-      if (amount != null && (!Number.isInteger(amount) || amount < 0)) return fail(res, 400, 'amount tidak valid');
+      if (amount != null && (!Number.isInteger(amount) || amount < 0 || amount > 100_000_000)) return fail(res, 400, 'amount tidak valid');
       // ODOMETER_* carry the odometer reading (km) in `amount`; cost types carry rupiah. Optional.
       // `stamped`: the phone's GPS camera already printed time/driver/GPS on the photo (not returned).
       const report = { id: randomUUID(), report_type: fields.report_type, notes: fields.notes || null, file_url, amount, created_at: fields.occurred_at || now, is_system: false, ...location(fields) };
