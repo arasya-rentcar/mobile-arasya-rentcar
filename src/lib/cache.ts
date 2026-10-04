@@ -23,18 +23,25 @@ export async function hydrateCache(qc: QueryClient) {
   } catch {}
 }
 
+/** Writes the driver's queries now (also used by the background task, which has no screen). */
+export async function saveCache(qc: QueryClient) {
+  const saved: Saved = qc
+    .getQueryCache()
+    .getAll()
+    .filter((q) => PERSISTED_ROOTS.has(String(q.queryKey[0])) && q.state.data !== undefined)
+    .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)
+    .slice(0, 40)
+    .map((q) => ({ key: q.queryKey, data: q.state.data, updatedAt: q.state.dataUpdatedAt }));
+  try {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+  } catch {}
+}
+
 export function persistCache(qc: QueryClient): () => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const write = () => {
     timer = null;
-    const saved: Saved = qc
-      .getQueryCache()
-      .getAll()
-      .filter((q) => PERSISTED_ROOTS.has(String(q.queryKey[0])) && q.state.data !== undefined)
-      .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)
-      .slice(0, 40)
-      .map((q) => ({ key: q.queryKey, data: q.state.data, updatedAt: q.state.dataUpdatedAt }));
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(saved)).catch(() => {});
+    void saveCache(qc);
   };
   const unsub = qc.getQueryCache().subscribe((event) => {
     if (event.type === 'updated' || event.type === 'removed') {

@@ -164,6 +164,11 @@ export function setQueueHandlers(h: QueueHandlers) {
   handlers = h;
 }
 
+/** False in a headless background start: no screen has set the handlers. */
+export function hasQueueHandlers() {
+  return Object.keys(handlers).length > 0;
+}
+
 /** Gate used by the processor (logged in + online). */
 export function setQueueGate(fn: () => boolean) {
   canSend = fn;
