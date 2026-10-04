@@ -11,8 +11,11 @@ import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
 
 import { hasAuthToken, setAuthToken } from './api';
-import { getQueue, loadQueue, processQueue } from './queue';
+import { hydrateCache, saveCache } from './cache';
+import { getQueue, hasQueueHandlers, loadQueue, processQueue, setQueueHandlers } from './queue';
+import { queryClient } from './queryClient';
 import { secureStorage, TOKEN_KEY } from './storage';
+import { queueHandlers } from './trips';
 
 export const QUEUE_SYNC_TASK = 'arasya-queue-sync';
 
@@ -28,7 +31,17 @@ if (Platform.OS !== 'web') {
         if (!token) return BackgroundTask.BackgroundTaskResult.Success; // logged out
         setAuthToken(token);
       }
+      // App closed (headless start): no screen set the queue handlers, so what gets sent here would
+      // be missing from the saved trip data. Opened later without signal, the app would then show
+      // a sent report as not there (next "Checkpoint N" repeated on the photo, odometer buttons
+      // wrong). Load the saved data, let the usual handlers record the answers, then save it.
+      const headless = !hasQueueHandlers();
+      if (headless) {
+        await hydrateCache(queryClient);
+        setQueueHandlers(queueHandlers);
+      }
       await processQueue();
+      if (headless) await saveCache(queryClient);
       return BackgroundTask.BackgroundTaskResult.Success;
     } catch {
       return BackgroundTask.BackgroundTaskResult.Failed;
