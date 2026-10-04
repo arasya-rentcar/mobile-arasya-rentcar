@@ -237,7 +237,8 @@ export default function ReportFormScreen() {
                 <TextInput
                   testID="amount-input"
                   value={amount != null ? formatThousands(amount) : ''}
-                  onChangeText={(t) => setAmountText(t.replace(/\D/g, '').slice(0, isOdo ? 7 : 10))}
+                  // Cost: 8 digits, the server refuses more than Rp 100.000.000 (report and photo would be lost).
+                  onChangeText={(t) => setAmountText(t.replace(/\D/g, '').slice(0, isOdo ? 7 : 8))}
                   keyboardType="number-pad"
                   placeholder={isOdo ? 'Contoh: 45.210' : '0'}
                   placeholderTextColor="#8593a3"
