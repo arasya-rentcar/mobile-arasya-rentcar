@@ -56,8 +56,9 @@ export default function ReportFormScreen() {
   const { trip } = useTrip(tripId);
   const me = useMe();
   const queue = useQueue();
+  // Odometer photo (system camera), or a receipt picked from the gallery.
   const [photo, setPhoto] = useState<string | null>(null);
-  // "Foto / Catatan": checkpoint photos come only from the GPS camera (stamped like the arrival photo).
+  // Checkpoint and receipt photos from the GPS camera (stamped like the arrival photo).
   const [shot, setShot] = useState<StampedPhoto | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [gpsProblem, setGpsProblem] = useState<GpsProblem | null>(null);
@@ -72,6 +73,12 @@ export default function ReportFormScreen() {
   const isOdo = type === 'ODOMETER_START' || type === 'ODOMETER_END';
   const isCost = COST_TYPES.includes(type);
   const isCheckpoint = type === 'PHOTO';
+  // Checkpoints only come from the GPS camera; receipts too, with the gallery as a way out.
+  const gpsCamera = isCheckpoint || isCost;
+  // The checkpoint photo's title is the catatan, so it is written before the photo and locked after.
+  const stampTitle = notes.trim().replace(/\s+/g, ' ');
+  const needsTitle = isCheckpoint && !stampTitle;
+  const titleLocked = isCheckpoint && !!shot;
   // "Checkpoint N": this trip's checkpoint photos sent or waiting to be sent, plus one.
   const checkpointNo = trip ? nextCheckpointNumber(trip, queue) : 1;
   const amount = parseRupiah(amountText);
@@ -92,6 +99,7 @@ export default function ReportFormScreen() {
     if ('error' in res) setError(res.error);
     else {
       setError(null);
+      setShot(null);
       setPhoto(res.uri);
     }
   };
@@ -109,7 +117,7 @@ export default function ReportFormScreen() {
     setBusy(true);
     try {
       const id = newId();
-      const source = isCheckpoint ? (shot?.uri ?? null) : photo;
+      const source = shot?.uri ?? photo;
       const photoUri = source ? await keepPhoto(source, id) : null;
       const reportType: ReportType = isCheckpoint && !shot ? 'NOTE' : type;
       enqueue({
@@ -121,8 +129,8 @@ export default function ReportFormScreen() {
         amount: isCost || isOdo ? amount : null,
         notes: notes.trim() || undefined,
         photoUri,
-        // Checkpoint photo: GPS fix (with the place name) and the stamp is already on the picture.
-        ...(isCheckpoint && shot ? { location: shot.fix, stamped: shot.stamped } : {}),
+        // GPS camera photo: GPS fix (with the place name) and the stamp is already on the picture.
+        ...(shot ? { location: shot.fix, stamped: shot.stamped } : {}),
       });
       const label = isCheckpoint && shot ? `Checkpoint ${checkpointNo}` : REPORT_LABEL[reportType];
       showNotice(online ? `${label} sedang dikirim…` : `${label} disimpan. Dikirim otomatis saat ada sinyal.`, 'success');
@@ -132,6 +140,33 @@ export default function ReportFormScreen() {
       setBusy(false);
     }
   };
+
+  const notesField = (
+    <>
+      <Text style={styles.label}>
+        {type === 'OTHER_COST' ? 'Biaya untuk apa?' : isCheckpoint ? 'Judul foto / catatan' : 'Catatan (boleh dikosongkan)'}
+      </Text>
+      <TextInput
+        testID="notes-input"
+        value={notes}
+        onChangeText={setNotes}
+        editable={!titleLocked}
+        placeholder={
+          type === 'FUEL'
+            ? 'Contoh: Pertamax 30 liter, SPBU Cibubur'
+            : type === 'OTHER_COST'
+              ? 'Contoh: cuci mobil, makan driver'
+              : isCheckpoint
+                ? 'Contoh: Istirahat di rest area KM 57'
+                : 'Tulis keterangan singkat'
+        }
+        placeholderTextColor="#8593a3"
+        multiline
+        style={[styles.notes, titleLocked && styles.notesLocked]}
+      />
+      {titleLocked ? <Text style={styles.photoBoxHint}>Judul ini sudah tercetak di foto. Hapus foto dulu untuk menggantinya.</Text> : null}
+    </>
+  );
 
   return (
     <>
@@ -148,16 +183,20 @@ export default function ReportFormScreen() {
           ) : null}
           {startKm != null ? <Text style={styles.hintText}>{`Odometer awal: ${formatKm(startKm)}`}</Text> : null}
 
-          {isCheckpoint ? (
+          {isCheckpoint ? notesField : null}
+
+          {gpsCamera ? (
             <>
-              <Text style={styles.label}>{`Foto checkpoint ${checkpointNo} (boleh tidak ada)`}</Text>
+              <Text style={styles.label}>
+                {isCheckpoint ? `Foto checkpoint ${checkpointNo} (boleh tidak ada)` : 'Foto struk (disarankan)'}
+              </Text>
               {shot ? (
                 <View style={{ gap: 10 }}>
                   <Image
                     source={{ uri: shot.uri }}
                     style={styles.stampPreview}
                     resizeMode="contain"
-                    accessibilityLabel={`Foto checkpoint ${checkpointNo} dengan cap waktu dan lokasi`}
+                    accessibilityLabel={isCheckpoint ? `Foto checkpoint ${checkpointNo} dengan cap waktu dan lokasi` : 'Foto struk dengan cap waktu dan lokasi'}
                   />
                   <PlaceLine
                     name={shot.fix.name}
@@ -176,31 +215,49 @@ export default function ReportFormScreen() {
                     <Button title="Hapus" icon="trash-outline" variant="danger" style={{ flex: 1 }} onPress={() => setShot(null)} />
                   </View>
                 </View>
+              ) : photo ? (
+                // Receipt picked from the gallery (no stamp).
+                <View style={{ gap: 10 }}>
+                  <Image source={{ uri: photo }} style={styles.preview} resizeMode="cover" accessibilityLabel="Foto terpilih" />
+                  <View style={styles.row}>
+                    <Button title="Foto ulang" icon="camera-reverse-outline" variant="outline" style={{ flex: 1 }} onPress={() => setCameraOpen(true)} />
+                    <Button title="Hapus" icon="trash-outline" variant="danger" style={{ flex: 1 }} onPress={() => setPhoto(null)} />
+                  </View>
+                </View>
               ) : (
-                <Pressable
-                  testID="take-photo"
-                  onPress={() => setCameraOpen(true)}
-                  style={({ pressed }) => [styles.photoBox, pressed && { opacity: 0.8 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Buka kamera GPS">
-                  <Ionicons name="camera" size={48} color={colors.primary} />
-                  <Text style={styles.photoBoxText}>Buka kamera GPS</Text>
-                  <Text style={styles.photoBoxHint}>
-                    {`Foto lokasi Anda sekarang (Checkpoint ${checkpointNo}). Waktu, nama Anda, dan lokasi langsung tercetak di foto.`}
-                  </Text>
-                </Pressable>
+                <View style={{ gap: 10 }}>
+                  <Pressable
+                    testID="take-photo"
+                    onPress={() => setCameraOpen(true)}
+                    disabled={needsTitle}
+                    style={({ pressed }) => [styles.photoBox, needsTitle && styles.photoBoxOff, pressed && { opacity: 0.8 }]}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: needsTitle }}
+                    accessibilityLabel="Buka kamera GPS">
+                    <Ionicons name="camera" size={48} color={needsTitle ? colors.textMuted : colors.primary} />
+                    <Text style={[styles.photoBoxText, needsTitle && { color: colors.textMuted }]}>Buka kamera GPS</Text>
+                    <Text style={styles.photoBoxHint}>
+                      {needsTitle
+                        ? 'Isi judul foto / catatan di atas dulu. Tulisan itu jadi judul di foto.'
+                        : isCheckpoint
+                          ? `Foto lokasi Anda sekarang (Checkpoint ${checkpointNo}). Judul, waktu, nama Anda, dan lokasi langsung tercetak di foto.`
+                          : 'Pastikan tulisan di struk terbaca. Waktu, nama Anda, dan lokasi langsung tercetak di foto.'}
+                    </Text>
+                  </Pressable>
+                  {isCost ? (
+                    <Button title="Pilih dari galeri" icon="images-outline" variant="outline" onPress={async () => handlePick(await pickFromGallery())} />
+                  ) : null}
+                </View>
               )}
-              {(gpsProblem || cameraProblem) && !shot ? (
+              {(gpsProblem || cameraProblem) && !shot && !photo ? (
                 <Banner tone="warning" icon={cameraProblem ? 'camera-outline' : 'location-outline'}>
-                  {`${cameraProblem ?? gpsProblem?.error} Anda tetap bisa kirim catatan saja.`}
+                  {`${cameraProblem ?? gpsProblem?.error} ${isCheckpoint ? 'Anda tetap bisa kirim catatan saja.' : 'Anda tetap bisa pilih foto dari galeri.'}`}
                 </Banner>
               ) : null}
             </>
           ) : (
             <>
-              <Text style={styles.label}>
-                {isOdo ? 'Foto odometer' : isCost ? 'Foto struk (disarankan)' : 'Foto (boleh tidak ada)'}
-              </Text>
+              <Text style={styles.label}>Foto odometer</Text>
               {photo ? (
                 <View style={{ gap: 10 }}>
                   <Image source={{ uri: photo }} style={styles.preview} resizeMode="cover" accessibilityLabel="Foto terpilih" />
@@ -219,9 +276,7 @@ export default function ReportFormScreen() {
                     accessibilityLabel="Ambil foto dengan kamera">
                     <Ionicons name="camera" size={48} color={colors.primary} />
                     <Text style={styles.photoBoxText}>Ambil foto</Text>
-                    <Text style={styles.photoBoxHint}>
-                      {isOdo ? 'Pastikan angka kilometer terbaca jelas' : 'Pastikan tulisan di struk terbaca'}
-                    </Text>
+                    <Text style={styles.photoBoxHint}>Pastikan angka kilometer terbaca jelas</Text>
                   </Pressable>
                   <Button title="Pilih dari galeri" icon="images-outline" variant="outline" onPress={async () => handlePick(await pickFromGallery())} />
                 </View>
@@ -250,22 +305,7 @@ export default function ReportFormScreen() {
             </>
           ) : null}
 
-          <Text style={styles.label}>{type === 'OTHER_COST' ? 'Biaya untuk apa?' : 'Catatan (boleh dikosongkan)'}</Text>
-          <TextInput
-            testID="notes-input"
-            value={notes}
-            onChangeText={setNotes}
-            placeholder={
-              type === 'FUEL'
-                ? 'Contoh: Pertamax 30 liter, SPBU Cibubur'
-                : type === 'OTHER_COST'
-                  ? 'Contoh: cuci mobil, makan driver'
-                  : 'Tulis keterangan singkat'
-            }
-            placeholderTextColor="#8593a3"
-            multiline
-            style={styles.notes}
-          />
+          {isCheckpoint ? null : notesField}
 
           {error ? (
             <Banner tone="error" icon="alert-circle">
@@ -291,11 +331,12 @@ export default function ReportFormScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {isCheckpoint ? (
+      {gpsCamera ? (
         <StampCamera
           visible={cameraOpen}
           info={{
-            title: `CHECKPOINT ${checkpointNo}`,
+            // Checkpoint: the driver's own title (catatan); receipts: what was paid.
+            title: isCheckpoint ? stampTitle : (TITLES[type] ?? '').toUpperCase(),
             orderCode: trip?.order_code ?? null,
             driverName: me.data?.name ?? 'Driver',
           }}
@@ -304,6 +345,7 @@ export default function ReportFormScreen() {
           onCameraProblem={onCameraProblem}
           onCaptured={(p) => {
             setShot(p);
+            setPhoto(null);
             setError(null);
             setGpsProblem(null);
             setCameraProblem(null);
@@ -333,6 +375,7 @@ const styles = StyleSheet.create({
   },
   photoBoxText: { fontSize: font.title, fontWeight: '900', color: colors.primary },
   photoBoxHint: { fontSize: font.small, color: colors.textMuted, textAlign: 'center' },
+  photoBoxOff: { borderColor: colors.border, backgroundColor: colors.surface },
   preview: { width: '100%', aspectRatio: 4 / 3, borderRadius: 16, backgroundColor: colors.surface },
   stampPreview: { width: '100%', aspectRatio: 3 / 4, borderRadius: 16, backgroundColor: '#000' },
   row: { flexDirection: 'row', gap: 10 },
@@ -359,4 +402,5 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     ...noOutline,
   },
+  notesLocked: { backgroundColor: colors.surface, color: colors.textMuted },
 });

@@ -27,7 +27,7 @@ import { Button } from './ui';
 const OUT_LONG_SIDE = 1600;
 
 export type StampInfo = {
-  /** First line, e.g. "SAMPAI DI LOKASI JEMPUT" or "CHECKPOINT 2". */
+  /** First line, e.g. "SAMPAI DI LOKASI JEMPUT", a checkpoint's title (the catatan) or "BENSIN". */
   title: string;
   orderCode: string | null;
   driverName: string;
@@ -87,7 +87,7 @@ export function StampOverlay({
           <Text style={[styles.date, { fontSize: u * 3.8 }]}>WIB</Text>
         </View>
       </View>
-      <Text style={[styles.line, styles.lineStrong, { fontSize: u * 3.6 }]} numberOfLines={1}>
+      <Text style={[styles.line, styles.lineStrong, { fontSize: u * 3.6 }]} numberOfLines={2}>
         {`${info.title}${info.orderCode ? ` · ${info.orderCode}` : ''}`}
       </Text>
       <Text style={[styles.line, { fontSize: u * 3.6 }]} numberOfLines={1}>{`Driver: ${info.driverName}`}</Text>
